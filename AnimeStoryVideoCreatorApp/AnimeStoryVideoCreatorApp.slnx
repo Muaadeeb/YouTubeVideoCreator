@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AnimeStoryVideoCreator/AnimeStoryVideoCreator.Client/AnimeStoryVideoCreator.Client.csproj" />
+  <Project Path="AnimeStoryVideoCreator/AnimeStoryVideoCreator/AnimeStoryVideoCreator.csproj" />
+</Solution>
