@@ -1,66 +1,91 @@
 ﻿@inherits LayoutComponentBase
 
-<div class="min-h-screen bg-[#0F1117] flex text-[#E5E7EB]">
+<div class="min-h-screen bg-[#0F1117] text-[#E5E7EB] flex font-sans">
+    
     <!-- Sidebar -->
     <div class="w-72 bg-zinc-950 border-r border-zinc-800 flex flex-col">
+        
+        <!-- Header -->
         <div class="p-6 border-b border-zinc-800">
             <h1 class="text-3xl font-bold tracking-tight neon-cyan">Anime Story Creator</h1>
-            <p class="text-zinc-500 text-sm mt-1">YouTube Video Factory • Powered by Grok Imagine</p>
+            <p class="text-zinc-500 text-sm mt-1">YouTube Video Factory • Grok Imagine</p>
         </div>
 
-        <nav class="flex-1 p-6 space-y-2">
-            <a href="/" class="flex items-center gap-3 px-4 py-3 rounded-2xl bg-zinc-900 hover:bg-zinc-800 transition-all neon-cyan">
+        <!-- Navigation -->
+        <nav class="flex-1 px-4 py-6 space-y-1">
+            <a href="/"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl bg-zinc-900 text-white hover:bg-zinc-800 transition-colors neon-cyan">
                 <span class="text-2xl">✨</span>
                 <span class="font-medium">New Project</span>
             </a>
 
-            <a href="/projects" class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-all">
+            <a href="/projects"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-colors">
                 <span class="text-2xl">📁</span>
                 <span class="font-medium">My Projects</span>
             </a>
 
-            <a href="/characters" class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-all">
+            <a href="/characters"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-colors">
                 <span class="text-2xl">👤</span>
                 <span class="font-medium">Character Vault</span>
             </a>
 
-            <a href="/series-settings" class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-all">
+            <a href="/series-settings"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-colors">
                 <span class="text-2xl">📚</span>
                 <span class="font-medium">Series Settings</span>
             </a>
 
-            <a href="/scripts" class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-all">
+            <a href="/scripts"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-colors">
                 <span class="text-2xl">📜</span>
                 <span class="font-medium">Script Library</span>
             </a>
 
-            <a href="/storyboards" class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-all">
+            <a href="/storyboards"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-colors">
                 <span class="text-2xl">🎞️</span>
                 <span class="font-medium">Storyboard Gallery</span>
             </a>
 
-            <a href="/analytics" class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-all">
+            <a href="/analytics"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-colors">
                 <span class="text-2xl">📊</span>
                 <span class="font-medium">Analytics</span>
             </a>
 
-            <a href="/settings" class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-all">
+            <a href="/settings"
+                   class="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-zinc-900 transition-colors">
                 <span class="text-2xl">⚙️</span>
                 <span class="font-medium">Settings</span>
             </a>
         </nav>
 
+        <!-- Footer -->
         <div class="p-6 border-t border-zinc-800 text-xs text-zinc-500 text-center">
-            Built for original anime story videos
+            Powered by Grok Imagine • Built for original anime stories
         </div>
     </div>
 
     <!-- Main Content Area -->
     <div class="flex-1 flex flex-col">
-        <header class="h-16 border-b border-zinc-800 bg-zinc-950 flex items-center px-8">
+        
+        <!-- Top Bar -->
+        <header class="h-16 border-b border-zinc-800 bg-zinc-950 flex items-center px-8 justify-between">
             <h2 class="text-xl font-semibold">@Title</h2>
+            
+            <div class="flex items-center gap-4">
+                <button class="px-4 py-2 text-sm bg-zinc-900 hover:bg-zinc-800 rounded-xl transition-colors">
+                    Full Auto Mode
+                </button>
+                <div class="w-8 h-8 bg-zinc-700 rounded-full flex items-center justify-center text-sm">
+                    👤
+                </div>
+            </div>
         </header>
 
+        <!-- Page Content -->
         <main class="flex-1 p-10 overflow-auto">
             @Body
         </main>
