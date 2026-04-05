@@ -1,5 +1,54 @@
-﻿@page "/"
+﻿@* @page "/" *@
 
-<h1 class="text-4xl font-bold neon-cyan">Welcome to Anime Story Creator</h1>
+@* <h1 class="text-4xl font-bold neon-cyan">Welcome to Anime Story Creator</h1>
 <p class="text-zinc-400 mt-4">Your dark neon sidebar should now be visible.</p>
-<p class="mt-8 text-sm text-zinc-500">If you see this, the layout is working. We can now build the real screens.</p>
+<p class="mt-8 text-sm text-zinc-500">If you see this, the layout is working. We can now build the real screens.</p> *@
+@* 
+@page "/"
+
+<div style="max-width: 800px;">
+    <h1 style="color: #00F5FF; font-size: 32px; margin-bottom: 16px;">Welcome to Anime Story Creator</h1>
+    
+    <p style="color: #CBD5E1; font-size: 18px; line-height: 1.6;">
+        This is your personal YouTube video factory for original anime / manhwa-style stories.
+    </p>
+
+    <div style="margin-top: 40px; padding: 24px; background-color: #1E2937; border-radius: 12px;">
+        <h2 style="color: #E2E8F0; margin-bottom: 16px;">Quick Start</h2>
+        <p style="color: #94A3B8;">
+            Click <strong style="color: #00F5FF;">New Project</strong> in the sidebar to begin creating your first story video.
+        </p>
+    </div>
+
+    <p style="margin-top: 60px; color: #64748B; font-size: 14px;">
+        We are now building the full workflow as defined in TODO-REFERENCE.md
+    </p>
+</div> *@
+
+@page "/"
+@inject IJSRuntime JS
+
+<div class="max-w-4xl">
+    <h1 style="color: #00F5FF; font-size: 32px; margin-bottom: 8px;">Welcome to Anime Story Creator</h1>
+    <p style="color: #CBD5E1; font-size: 18px;">This is your personal YouTube video factory for original anime / manhwa-style stories.</p>
+
+    <div style="margin-top: 48px; padding: 32px; background-color: #1E2937; border-radius: 16px;">
+        <h2 style="color: #E2E8F0; margin-bottom: 24px;">Quick Start</h2>
+
+        <button @onclick="ShowNewProjectModal"
+                style="background-color: #00F5FF; color: #0F1117; padding: 16px 32px; border: none; border-radius: 12px; font-size: 18px; font-weight: 600; cursor: pointer;">
+            ✨ Create New Project
+        </button>
+
+        <p style="margin-top: 24px; color: #94A3B8;">
+            This will open the New Project form as defined in our spec.
+        </p>
+    </div>
+</div>
+
+@code {
+    private async Task ShowNewProjectModal()
+    {
+        await JS.InvokeVoidAsync("alert", "New Project modal will appear here.\n\nProject Name, Series Name, Target Length, Art Style.");
+    }
+}
