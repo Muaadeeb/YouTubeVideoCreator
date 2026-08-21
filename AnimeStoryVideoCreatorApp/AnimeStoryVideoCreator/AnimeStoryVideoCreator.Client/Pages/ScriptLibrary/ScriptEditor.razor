@@ -1,0 +1,298 @@
+@page "/scripts"
+@inject IProjectService ProjectService
+@inject IToastService Toast
+
+@if (ProjectService.CurrentProject is null)
+{
+    <div class="empty-state">
+        <p>No project loaded.</p>
+        <a class="btn btn-primary" href="/projects">My Projects</a>
+    </div>
+}
+else if (ProjectService.CurrentProject.Scenes.Count == 0)
+{
+    <div class="empty-state">
+        <h2 class="page-title" style="font-size: 22px;">No script yet</h2>
+        <p class="muted">Generate a script from Story Input first.</p>
+        <a class="btn btn-primary" href="/story-input">Story Input</a>
+    </div>
+}
+else
+{
+    var p = ProjectService.CurrentProject;
+    var totalSec = ScriptTiming.TotalRuntimeSeconds(p.Scenes);
+    var totalFrames = p.AllPanels().Count();
+
+    <h1 class="page-title">Script Library</h1>
+    <p class="page-sub">
+        @p.ProjectName — each <strong>scene</strong> is a <strong>6–15s</strong> window;
+        <strong>frames</strong> land every <strong>3–5s</strong> inside that window (storyboard stills / future clip beats).
+    </p>
+
+    <div class="summary-bar">
+        <div><strong>Scenes:</strong> @p.Scenes.Count</div>
+        <div><strong>Frames:</strong> @totalFrames</div>
+        <div><strong>Est. runtime:</strong> @ScriptTiming.FormatClock(totalSec) (@totalSec s)</div>
+        <div><strong>Model:</strong> @ScriptTiming.SceneMinSeconds–@ScriptTiming.SceneMaxSeconds s / scene · @ScriptTiming.FrameIntervalMinSeconds–@ScriptTiming.FrameIntervalMaxSeconds s / frame</div>
+    </div>
+
+    <div class="row-actions mb-2">
+        <a class="btn btn-primary" href="/storyboards">Open Storyboard Gallery</a>
+        <button class="btn btn-secondary" @onclick="Save">Save changes</button>
+        <button class="btn btn-ghost" @onclick="NormalizeTiming">Normalize all timing</button>
+        <button class="btn btn-ghost" @onclick="EnsureFrames">Fill missing frames</button>
+        <button class="btn btn-ghost" @onclick="AddScene">+ Scene</button>
+    </div>
+
+    <datalist id="asvc-locations">
+        @foreach (var loc in p.Locations.OrderBy(l => l.Name))
+        {
+            <option value="@loc.Name"></option>
+        }
+    </datalist>
+
+    @if (!string.IsNullOrWhiteSpace(p.ScriptNotes))
+    {
+        <div class="card mb-2">
+            <div class="dim" style="font-size: 12px; margin-bottom: 6px;">Notes from Grok</div>
+            <div>@p.ScriptNotes</div>
+        </div>
+    }
+
+    @foreach (var scene in p.Scenes.OrderBy(s => s.Order))
+    {
+        var sceneStart = SceneAbsoluteStart(p, scene);
+        var sceneEnd = sceneStart + ScriptTiming.ClampSceneDuration(scene.DurationSeconds);
+
+        <div class="card mb-2">
+            <div class="row-actions" style="justify-content: space-between; margin-bottom: 8px;">
+                <div>
+                    <span style="color: var(--accent); font-weight: 700;">Scene @scene.Order</span>
+                    <span class="dim" style="margin-left: 10px; font-size: 13px;">
+                        Timeline @ScriptTiming.FormatClock(sceneStart)–@ScriptTiming.FormatClock(sceneEnd)
+                        · @scene.Panels.Count frame(s)
+                        · suggest @scene.SuggestedFrameCount
+                    </span>
+                </div>
+                <div class="row-actions gap-sm">
+                    <button class="btn btn-ghost btn-sm" @onclick="() => AddFrame(scene)">+ Frame</button>
+                    <button class="btn btn-danger btn-sm" @onclick="() => RemoveScene(scene)">Remove scene</button>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div>
+                    <label class="label">Title</label>
+                    <input class="input" @bind="scene.Title" @bind:event="oninput" />
+                </div>
+                <div class="grid-2">
+                    <div>
+                        <label class="label">Scene window (6–15 s)</label>
+                        <input class="input" type="number" min="6" max="15"
+                               value="@scene.DurationSeconds"
+                               @onchange="e => OnSceneDuration(scene, e)" />
+                    </div>
+                    <div>
+                        <label class="label">Frame every (3–5 s)</label>
+                        <input class="input" type="number" min="3" max="5"
+                               value="@scene.FrameIntervalSeconds"
+                               @onchange="e => OnFrameInterval(scene, e)" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid-2 mt-2">
+                <div>
+                    <label class="label">Location / set</label>
+                    <input class="input" list="asvc-locations" @bind="scene.LocationName" @bind:event="oninput"
+                           @bind:after="() => OnLocationName(p, scene)"
+                           placeholder="Ashfall Village Square" />
+                </div>
+                <div>
+                    <label class="label">Cast (comma-separated names)</label>
+                    <input class="input" value="@string.Join(", ", scene.CastNames)"
+                           @onchange="e => OnCast(scene, e)"
+                           placeholder="Kael, Mira" />
+                </div>
+            </div>
+            <div class="mt-2">
+                <label class="label">What happens in this window</label>
+                <textarea class="textarea" style="min-height: 90px;" @bind="scene.Description" @bind:event="oninput"></textarea>
+            </div>
+            <div class="mt-2">
+                <label class="label">Extras lock (named background people — same faces/clothes/count)</label>
+                <textarea class="textarea" style="min-height: 60px;" @bind="scene.ExtrasLock" @bind:event="oninput"
+                          placeholder="Vendor Mira (mustard apron) and thin old man with green cap only. Same two extras."></textarea>
+            </div>
+            <div class="mt-2">
+                <label class="label">Dialogue / narration (fits ~@scene.DurationSeconds s)</label>
+                <textarea class="textarea" style="min-height: 70px;" @bind="scene.Dialogue" @bind:event="oninput"></textarea>
+            </div>
+
+            <div class="mt-2 dim" style="font-size: 12px;">
+                Frames (stills) — each can become an Imagine still / short motion beat later
+            </div>
+
+            @foreach (var panel in scene.Panels.OrderBy(x => x.Order))
+            {
+                <div class="mt-2" style="padding: 12px; background: var(--bg-input); border-radius: 8px; border-left: 3px solid var(--accent);">
+                    <div class="row-actions" style="justify-content: space-between;">
+                        <strong style="font-size: 13px; color: var(--text);">
+                            Frame @panel.Order
+                            <span class="dim"> · t+@panel.StartTimeSec.ToString("0")s in scene
+                            · abs ~@ScriptTiming.FormatClock(sceneStart + panel.StartTimeSec)</span>
+                        </strong>
+                        <button class="btn btn-danger btn-sm" @onclick="() => RemoveFrame(scene, panel)" disabled="@(scene.Panels.Count <= 1)">Remove</button>
+                    </div>
+                    <label class="label mt-2">Image prompt (keyframe)</label>
+                    <textarea class="textarea" style="min-height: 70px;" @bind="panel.ImagePrompt" @bind:event="oninput"></textarea>
+                    <label class="label mt-2">Caption / VO fragment</label>
+                    <input class="input" @bind="panel.Caption" @bind:event="oninput" />
+                    <label class="label mt-2">Motion prompt (for optional paid/free video later)</label>
+                    <input class="input" @bind="panel.MotionPrompt" @bind:event="oninput" />
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    private static int SceneAbsoluteStart(Project p, Scene scene)
+    {
+        var sum = 0;
+        foreach (var s in p.Scenes.OrderBy(x => x.Order))
+        {
+            if (s.Id == scene.Id) break;
+            sum += ScriptTiming.ClampSceneDuration(s.DurationSeconds);
+        }
+        return sum;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ProjectService.InitializeAsync();
+        if (ProjectService.CurrentProject is { Scenes.Count: > 0 } p)
+        {
+            // Soft migrate old 30s scenes when opening library
+            foreach (var s in p.Scenes)
+            {
+                if (s.DurationSeconds > ScriptTiming.SceneMaxSeconds || s.FrameIntervalSeconds <= 0)
+                {
+                    if (s.DurationSeconds > ScriptTiming.SceneMaxSeconds)
+                        s.DurationSeconds = ScriptTiming.SceneDefaultSeconds;
+                    if (s.FrameIntervalSeconds <= 0)
+                        s.FrameIntervalSeconds = ScriptTiming.FrameIntervalDefaultSeconds;
+                    ScriptTiming.ApplyFrameTimeline(s);
+                }
+            }
+        }
+    }
+
+    private async Task Save()
+    {
+        if (ProjectService.CurrentProject is null) return;
+        ScriptApplyHelper.NormalizeProjectTiming(ProjectService.CurrentProject);
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show("Script saved (timing normalized to 6–15s scenes / 3–5s frames).", ToastLevel.Success);
+    }
+
+    private void NormalizeTiming()
+    {
+        if (ProjectService.CurrentProject is null) return;
+        ScriptApplyHelper.NormalizeProjectTiming(ProjectService.CurrentProject);
+        Toast.Show("Timing normalized.", ToastLevel.Info);
+    }
+
+    private void EnsureFrames()
+    {
+        if (ProjectService.CurrentProject is null) return;
+        foreach (var scene in ProjectService.CurrentProject.Scenes)
+            ScriptTiming.EnsureMinimumFrames(scene);
+        Toast.Show("Filled frames to match scene length ÷ interval.", ToastLevel.Success);
+    }
+
+    private void OnSceneDuration(Scene scene, ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+            scene.DurationSeconds = ScriptTiming.ClampSceneDuration(v);
+        ScriptTiming.ApplyFrameTimeline(scene);
+    }
+
+    private void OnFrameInterval(Scene scene, ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+            scene.FrameIntervalSeconds = ScriptTiming.ClampFrameInterval(v);
+        ScriptTiming.ApplyFrameTimeline(scene);
+    }
+
+    private void AddFrame(Scene scene)
+    {
+        var order = scene.Panels.Count + 1;
+        scene.Panels.Add(new StoryboardPanel
+        {
+            SceneId = scene.Id,
+            Order = order,
+            ImagePrompt = $"{scene.Title} — keyframe {order}",
+            Caption = scene.Dialogue ?? scene.Title,
+            MotionPrompt = $"Cinematic anime motion for: {scene.Title}, frame {order}"
+        });
+        ScriptTiming.ApplyFrameTimeline(scene);
+    }
+
+    private void RemoveFrame(Scene scene, StoryboardPanel panel)
+    {
+        if (scene.Panels.Count <= 1) return;
+        scene.Panels.Remove(panel);
+        ScriptTiming.ApplyFrameTimeline(scene);
+    }
+
+    private void AddScene()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var order = p.Scenes.Count == 0 ? 1 : p.Scenes.Max(s => s.Order) + 1;
+        var scene = new Scene
+        {
+            Order = order,
+            Title = $"Scene {order}",
+            Description = "",
+            DurationSeconds = ScriptTiming.SceneDefaultSeconds,
+            FrameIntervalSeconds = ScriptTiming.FrameIntervalDefaultSeconds
+        };
+        ScriptTiming.EnsureMinimumFrames(scene);
+        p.Scenes.Add(scene);
+    }
+
+    private static void OnLocationName(Project project, Scene scene)
+    {
+        if (string.IsNullOrWhiteSpace(scene.LocationName))
+        {
+            scene.LocationId = null;
+            return;
+        }
+
+        var loc = project.Locations.FirstOrDefault(l =>
+            string.Equals(l.Name, scene.LocationName.Trim(), StringComparison.OrdinalIgnoreCase));
+        scene.LocationId = loc?.Id;
+    }
+
+    private static void OnCast(Scene scene, ChangeEventArgs e)
+    {
+        var raw = e.Value?.ToString() ?? "";
+        scene.CastNames = raw
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(n => n.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void RemoveScene(Scene scene)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        p.Scenes.Remove(scene);
+        var i = 1;
+        foreach (var s in p.Scenes.OrderBy(x => x.Order))
+            s.Order = i++;
+    }
+}

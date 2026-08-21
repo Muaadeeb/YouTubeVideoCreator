@@ -1,0 +1,422 @@
+@page "/review"
+@inject IProjectService ProjectService
+@inject IToastService Toast
+@inject IJSRuntime JS
+@inject IGenerationPreferences Prefs
+
+@if (ProjectService.CurrentProject is null)
+{
+    <div class="empty-state">
+        <h2 class="page-title" style="font-size: 22px;">No project loaded</h2>
+        <p class="muted">Open Project #3 (or any project) from My Projects, then return here for QC.</p>
+        <a class="btn btn-primary" href="/projects">My Projects</a>
+    </div>
+}
+else
+{
+    var p = ProjectService.CurrentProject;
+    var snap = ProjectQc.Snapshot(p);
+    var frames = GetFilteredFrames(p).ToList();
+    var current = frames.ElementAtOrDefault(_index);
+    Scene? scene = current is null ? null : p.Scenes.FirstOrDefault(s => s.Id == current.SceneId);
+    var image = current is null ? null : p.FindAsset(current.GeneratedImageAssetId);
+    var video = current is null ? null : p.FindAsset(current.GeneratedVideoAssetId);
+
+    <h1 class="page-title">Frame QC Review</h1>
+    <p class="page-sub">
+        @p.ProjectName — approve / reject stills before video. Only <strong>Approved</strong> frames should enter the video queue.
+    </p>
+
+    <div class="summary-bar">
+        <div><strong>Scenes:</strong> @snap.SceneCount</div>
+        <div><strong>Frames:</strong> @snap.FrameCount</div>
+        <div><strong>Stills:</strong> @snap.WithStill / @snap.FrameCount</div>
+        <div><strong>Missing still:</strong> <span style="color:@(snap.MissingStill > 0 ? "var(--warning)" : "var(--success)")">@snap.MissingStill</span></div>
+        <div><strong>Pending:</strong> @snap.PendingReview</div>
+        <div><strong>Approved:</strong> <span style="color:var(--success)">@snap.Approved</span></div>
+        <div><strong>Needs fix:</strong> @snap.NeedsFix</div>
+        <div><strong>Rejected:</strong> <span style="color:var(--danger)">@snap.Rejected</span></div>
+        <div><strong>Video queue:</strong> @snap.QueuedForVideo</div>
+        <div><strong>Clips done:</strong> @snap.WithVideo</div>
+    </div>
+
+    <div class="row-actions mb-2">
+        <label class="label" style="margin:0;">Filter</label>
+        <select class="select" style="width:auto; min-width:200px;" @bind="_filter" @bind:after="OnFilterChanged">
+            <option value="all">All frames</option>
+            <option value="pending_still">Pending + has still</option>
+            <option value="pending_any">All pending</option>
+            <option value="approved">Approved</option>
+            <option value="needsfix">Needs fix</option>
+            <option value="rejected">Rejected</option>
+            <option value="missing">Missing still</option>
+            <option value="queued">Queued for video</option>
+            <option value="no_video">Approved, no video yet</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" disabled="@(frames.Count == 0 || _index <= 0)" @onclick="Prev">← Prev</button>
+        <span class="muted" style="font-size:13px;">
+            @(frames.Count == 0 ? "0" : $"{_index + 1}") / @frames.Count
+        </span>
+        <button class="btn btn-ghost btn-sm" disabled="@(frames.Count == 0 || _index >= frames.Count - 1)" @onclick="Next">Next →</button>
+        <button class="btn btn-secondary btn-sm" @onclick="Save">Save QC</button>
+        <a class="btn btn-ghost btn-sm" href="/storyboards">Storyboard</a>
+        <a class="btn btn-ghost btn-sm" href="/scripts">Script</a>
+    </div>
+
+    <div class="row-actions mb-2">
+        <button class="btn btn-ghost btn-sm" disabled="@(snap.ReadyForVideoGen == 0)" @onclick="QueueAllApproved"
+                title="Mark all Approved frames (with still, no clip) as queued">
+            Queue all approved for video (@snap.ReadyForVideoGen)
+        </button>
+        <button class="btn btn-ghost btn-sm" @onclick="ClearQueue">Clear video queue flags</button>
+        <button class="btn btn-ghost btn-sm" disabled="@(ProjectQc.VideoQueue(p).Count() == 0)" @onclick="CopyVideoQueuePrompts">
+            Copy motion prompts (queue)
+        </button>
+        <button class="btn btn-ghost btn-sm" @onclick="DownloadQcReport">Download QC report</button>
+    </div>
+
+    @if (frames.Count == 0)
+    {
+        <div class="empty-state">
+            No frames match this filter.
+            @if (snap.FrameCount == 0)
+            {
+                <p>Generate a script first.</p>
+            }
+            else if (snap.MissingStill == snap.FrameCount)
+            {
+                <p>Import stills on Storyboard, then return to review.</p>
+            }
+        </div>
+    }
+    else if (current is not null)
+    {
+        <div class="grid-2" style="align-items: start;">
+            <div class="card" style="padding: 12px;">
+                @if (ProjectQc.HasStill(p, current) && image is not null)
+                {
+                    @if (!string.IsNullOrWhiteSpace(image.DataBase64))
+                    {
+                        <img src="@ToDataUrl(image)" alt="@current.Caption" style="width:100%; border-radius:10px; display:block;" />
+                    }
+                    else if (!string.IsNullOrWhiteSpace(image.ExternalRef))
+                    {
+                        <img src="@image.ExternalRef" alt="@current.Caption" style="width:100%; border-radius:10px; display:block;" />
+                    }
+                }
+                else
+                {
+                    <div class="placeholder-thumb" style="min-height: 280px;">No still — import or generate before approving for video</div>
+                }
+
+                @if (video is not null && !string.IsNullOrWhiteSpace(video.ExternalRef) && !video.ExternalRef.StartsWith("idb:"))
+                {
+                    <div class="mt-2">
+                        <div class="dim" style="font-size:12px; margin-bottom:6px;">Existing video clip</div>
+                        <video src="@video.ExternalRef" controls playsinline style="width:100%; border-radius:10px;"></video>
+                    </div>
+                }
+            </div>
+
+            <div class="stack">
+                <div class="card">
+                    <div class="dim" style="font-size:12px;">Scene @scene?.Order · Frame @current.Order</div>
+                    <h2 style="margin: 6px 0; font-size: 20px; color: var(--text);">@(scene?.Title ?? "Scene")</h2>
+                    <p class="muted" style="font-size: 13px; margin: 0;">
+                        Scene window ~@scene?.DurationSeconds s · frame t+@current.StartTimeSec.ToString("0")s
+                        · Status: <strong style="color:@StatusColor(current.ReviewStatus)">@current.ReviewStatus</strong>
+                        @if (current.QueuedForVideo)
+                        {
+                            <span style="color:var(--accent);"> · Queued for video</span>
+                        }
+                    </p>
+                </div>
+
+                <div class="card">
+                    <h3 style="margin:0 0 10px; font-size:15px; color:var(--accent);">QC checklist</h3>
+                    <ul class="muted" style="font-size:13px; line-height:1.55; margin:0; padding-left:1.1rem;">
+                        <li>Matches scene beat / story moment</li>
+                        <li>Character consistency vs vault</li>
+                        <li>Readable composition for 16:9 YouTube</li>
+                        <li>System UI / text legible if important</li>
+                        <li>No glitches / wrong age / broken anatomy</li>
+                        <li>Caption fits a 3–5s beat</li>
+                    </ul>
+                </div>
+
+                <div class="card">
+                    <label class="label">Image prompt</label>
+                    <textarea class="textarea" style="min-height:72px;" @bind="current.ImagePrompt" @bind:event="oninput"></textarea>
+                    <label class="label mt-2">Caption / VO</label>
+                    <input class="input" @bind="current.Caption" @bind:event="oninput" />
+                    <label class="label mt-2">Motion prompt (for video)</label>
+                    <textarea class="textarea" style="min-height:60px;" @bind="current.MotionPrompt" @bind:event="oninput"></textarea>
+                    <label class="label mt-2">Review notes</label>
+                    <textarea class="textarea" style="min-height:60px;" @bind="current.ReviewNotes" @bind:event="oninput"
+                              placeholder="Why rejected / what to fix…"></textarea>
+                    <label style="display:flex; gap:8px; align-items:center; margin-top:12px; font-size:14px; color:var(--text-muted);">
+                        <input type="checkbox" @bind="current.QueuedForVideo" />
+                        Queued for video (only if Approved + has still)
+                    </label>
+                </div>
+
+                <div class="row-actions">
+                    <button class="btn btn-primary" disabled="@(!ProjectQc.HasStill(p, current))" @onclick="() => SetStatus(current, FrameReviewStatus.Approved)">
+                        Approve → queue
+                    </button>
+                    <button class="btn btn-secondary" @onclick="() => SetStatus(current, FrameReviewStatus.NeedsFix)">
+                        Needs fix
+                    </button>
+                    <button class="btn btn-danger" @onclick="() => SetStatus(current, FrameReviewStatus.Rejected)">
+                        Reject
+                    </button>
+                    <button class="btn btn-ghost" @onclick="() => SetStatus(current, FrameReviewStatus.Pending)">
+                        Reset pending
+                    </button>
+                </div>
+
+                @if (scene is not null)
+                {
+                    <div class="card">
+                        <h3 style="margin:0 0 8px; font-size:15px; color:var(--accent);">Scene notes</h3>
+                        <p class="muted" style="font-size:13px;">@scene.Description</p>
+                        <label class="label">Scene review</label>
+                        <select class="select" @bind="scene.ReviewStatus">
+                            <option value="@SceneReviewStatus.Pending">Pending</option>
+                            <option value="@SceneReviewStatus.Approved">Approved</option>
+                            <option value="@SceneReviewStatus.NeedsFix">Needs fix</option>
+                            <option value="@SceneReviewStatus.Rejected">Rejected</option>
+                        </select>
+                        <label class="label mt-2">Scene notes</label>
+                        <input class="input" @bind="scene.ReviewNotes" @bind:event="oninput" />
+                    </div>
+                }
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private string _filter = "pending_still";
+    private int _index;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ProjectService.InitializeAsync();
+        await Prefs.LoadAsync();
+        _index = 0;
+    }
+
+    private IEnumerable<StoryboardPanel> GetFilteredFrames(Project p)
+    {
+        var all = p.AllPanels().ToList();
+        return _filter switch
+        {
+            "pending_still" => all.Where(f => f.ReviewStatus == FrameReviewStatus.Pending && ProjectQc.HasStill(p, f)),
+            "pending_any" => all.Where(f => f.ReviewStatus == FrameReviewStatus.Pending),
+            "approved" => all.Where(f => f.ReviewStatus == FrameReviewStatus.Approved),
+            "needsfix" => all.Where(f => f.ReviewStatus == FrameReviewStatus.NeedsFix),
+            "rejected" => all.Where(f => f.ReviewStatus == FrameReviewStatus.Rejected),
+            "missing" => all.Where(f => !ProjectQc.HasStill(p, f)),
+            "queued" => all.Where(f => f.QueuedForVideo),
+            "no_video" => all.Where(f =>
+                f.ReviewStatus == FrameReviewStatus.Approved
+                && ProjectQc.HasStill(p, f)
+                && !ProjectQc.HasVideo(p, f)),
+            _ => all
+        };
+    }
+
+    private void OnFilterChanged()
+    {
+        _index = 0;
+    }
+
+    private void Prev()
+    {
+        if (_index > 0) _index--;
+    }
+
+    private void Next()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var n = GetFilteredFrames(p).Count();
+        if (_index < n - 1) _index++;
+    }
+
+    private async Task SetStatus(StoryboardPanel panel, FrameReviewStatus status)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+
+        if (status == FrameReviewStatus.Approved && !ProjectQc.HasStill(p, panel))
+        {
+            Toast.Show("Cannot approve without a still. Import or generate first.", ToastLevel.Warning);
+            return;
+        }
+
+        ProjectQc.SetReview(panel, status, panel.ReviewNotes);
+        if (status == FrameReviewStatus.Approved && ProjectQc.HasStill(p, panel))
+            panel.QueuedForVideo = true;
+
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show($"Marked {status}.", ToastLevel.Success);
+
+        // Advance to next in filter when possible
+        var frames = GetFilteredFrames(p).ToList();
+        if (_index >= frames.Count && frames.Count > 0)
+            _index = frames.Count - 1;
+        else if (status is FrameReviewStatus.Approved or FrameReviewStatus.Rejected or FrameReviewStatus.NeedsFix)
+        {
+            // stay or step forward if current disappeared from filter
+            if (!frames.Contains(panel) && _index < frames.Count)
+            {
+                // index already points at next after removal from pending filter
+            }
+            else if (_index < frames.Count - 1)
+                _index++;
+        }
+    }
+
+    private async Task Save()
+    {
+        if (ProjectService.CurrentProject is null) return;
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show("QC saved.", ToastLevel.Success);
+    }
+
+    private async Task QueueAllApproved()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var n = 0;
+        foreach (var f in p.AllPanels())
+        {
+            if (f.ReviewStatus == FrameReviewStatus.Approved && ProjectQc.HasStill(p, f) && !ProjectQc.HasVideo(p, f))
+            {
+                f.QueuedForVideo = true;
+                n++;
+            }
+        }
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show($"Queued {n} approved frame(s) for video.", ToastLevel.Success);
+    }
+
+    private async Task ClearQueue()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        foreach (var f in p.AllPanels())
+            f.QueuedForVideo = false;
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show("Video queue flags cleared.", ToastLevel.Info);
+    }
+
+    private async Task CopyVideoQueuePrompts()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var queue = ProjectQc.VideoQueue(p).ToList();
+        if (queue.Count == 0)
+        {
+            Toast.Show("Video queue is empty. Approve frames first.", ToastLevel.Warning);
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# Video queue — {p.ProjectName}");
+        sb.AppendLine("# Approved frames only. Use still + motion for I2V.");
+        sb.AppendLine();
+        var i = 0;
+        foreach (var f in queue)
+        {
+            i++;
+            var scene = p.Scenes.FirstOrDefault(s => s.Id == f.SceneId);
+            sb.AppendLine("==========");
+            sb.AppendLine($"CLIP {i} · Scene {scene?.Order} · Frame {f.Order} · t+{f.StartTimeSec:0}s");
+            sb.AppendLine($"Caption: {f.Caption}");
+            sb.AppendLine("Motion:");
+            sb.AppendLine(string.IsNullOrWhiteSpace(f.MotionPrompt)
+                ? $"Cinematic anime motion, {scene?.FrameIntervalSeconds ?? 4}s: {scene?.Title}"
+                : f.MotionPrompt);
+            sb.AppendLine();
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", sb.ToString());
+            Toast.Show($"Copied {queue.Count} motion prompt(s) for video queue.", ToastLevel.Success);
+        }
+        catch
+        {
+            Toast.Show("Clipboard failed — use Download QC report instead.", ToastLevel.Warning);
+        }
+    }
+
+    private async Task DownloadQcReport()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var snap = ProjectQc.Snapshot(p);
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# QC Report — {p.ProjectName}");
+        sb.AppendLine($"Series: {p.SeriesName}");
+        sb.AppendLine($"Generated: {DateTime.UtcNow:O}");
+        sb.AppendLine();
+        sb.AppendLine("## Summary");
+        sb.AppendLine($"- Scenes: {snap.SceneCount}");
+        sb.AppendLine($"- Frames: {snap.FrameCount}");
+        sb.AppendLine($"- With still: {snap.WithStill}");
+        sb.AppendLine($"- Missing still: {snap.MissingStill}");
+        sb.AppendLine($"- Pending: {snap.PendingReview}");
+        sb.AppendLine($"- Approved: {snap.Approved}");
+        sb.AppendLine($"- Needs fix: {snap.NeedsFix}");
+        sb.AppendLine($"- Rejected: {snap.Rejected}");
+        sb.AppendLine($"- Queued for video: {snap.QueuedForVideo}");
+        sb.AppendLine($"- Already have video: {snap.WithVideo}");
+        sb.AppendLine();
+        sb.AppendLine("## Frames");
+        foreach (var scene in p.Scenes.OrderBy(s => s.Order))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"### Scene {scene.Order}: {scene.Title} [{scene.ReviewStatus}] ({scene.DurationSeconds}s)");
+            foreach (var f in scene.Panels.OrderBy(x => x.Order))
+            {
+                var still = ProjectQc.HasStill(p, f) ? "still:yes" : "still:NO";
+                var vid = ProjectQc.HasVideo(p, f) ? "video:yes" : "video:no";
+                sb.AppendLine(
+                    $"- F{f.Order} t+{f.StartTimeSec:0}s | {f.ReviewStatus} | {still} | {vid} | queue:{f.QueuedForVideo} | {f.Caption}");
+                if (!string.IsNullOrWhiteSpace(f.ReviewNotes))
+                    sb.AppendLine($"  Notes: {f.ReviewNotes}");
+            }
+        }
+
+        var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        var name = $"{Sanitize(p.ProjectName)}_qc_report.txt";
+        await JS.InvokeVoidAsync("asvcDownloadBase64", name, "text/plain", b64);
+        Toast.Show("QC report downloaded.", ToastLevel.Success);
+    }
+
+    private static string StatusColor(FrameReviewStatus s) => s switch
+    {
+        FrameReviewStatus.Approved => "var(--success)",
+        FrameReviewStatus.Rejected => "var(--danger)",
+        FrameReviewStatus.NeedsFix => "var(--warning)",
+        _ => "var(--text-muted)"
+    };
+
+    private static string ToDataUrl(GeneratedAsset asset)
+    {
+        var raw = asset.DataBase64 ?? "";
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return raw;
+        return $"data:{asset.MimeType};base64,{raw}";
+    }
+
+    private static string Sanitize(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(name.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+        return string.IsNullOrWhiteSpace(cleaned) ? "project" : cleaned.Trim();
+    }
+}

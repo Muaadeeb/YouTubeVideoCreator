@@ -1,4 +1,14 @@
 <Solution>
+  <Folder Name="/docs/">
+    <File Path="docs/README.md" />
+  </Folder>
+  <Folder Name="/docs/notes/">
+    <File Path="docs/notes/README.md" />
+  </Folder>
+  <Folder Name="/docs/planning/">
+    <File Path="docs/planning/Design-AnimeStoryVideoCreator.md" />
+    <File Path="docs/planning/README.md" />
+  </Folder>
   <Project Path="AnimeStoryVideoCreator/AnimeStoryVideoCreator.Client/AnimeStoryVideoCreator.Client.csproj" />
   <Project Path="AnimeStoryVideoCreator/AnimeStoryVideoCreator/AnimeStoryVideoCreator.csproj" />
 </Solution>

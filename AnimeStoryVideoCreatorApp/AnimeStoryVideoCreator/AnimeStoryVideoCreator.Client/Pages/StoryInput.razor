@@ -1,0 +1,160 @@
+@page "/story-input"
+@inject IProjectService ProjectService
+@inject IStoryGenerationService StoryGen
+@inject IToastService Toast
+@inject IBusyService Busy
+@inject NavigationManager Nav
+
+@if (ProjectService.CurrentProject is null)
+{
+    <div class="empty-state">
+        <h2 class="page-title" style="font-size: 22px;">No project loaded</h2>
+        <p class="muted">Create a project or open one from My Projects.</p>
+        <div class="row-actions" style="justify-content: center; margin-top: 16px;">
+            <a class="btn btn-primary" href="/">New Project</a>
+            <a class="btn btn-secondary" href="/projects">My Projects</a>
+        </div>
+    </div>
+}
+else
+{
+    var p = ProjectService.CurrentProject;
+
+    <h1 class="page-title">Story Input</h1>
+    <p class="page-sub">
+        Paste your idea. Grok builds an intense script as <strong>6–15s scene windows</strong>
+        with <strong>frames every 3–5s</strong> (ready for free Imagine stills or selective paid API).
+    </p>
+
+    <div class="summary-bar">
+        <div><strong>Project:</strong> @p.ProjectName</div>
+        <div><strong>Series:</strong> @p.SeriesName</div>
+        <div><strong>Length:</strong> @p.TargetLength</div>
+        <div><strong>Art Style:</strong> @p.ArtStyle</div>
+        <div><strong>Status:</strong> @p.Status</div>
+    </div>
+
+    <div class="mb-2">
+        <span class="label" style="display:inline; margin-right: 12px;">Tone:</span>
+        @foreach (var tone in _tones)
+        {
+            <button type="button" class="chip @(p.Tone == tone ? "active" : "")" disabled="@_busy" @onclick="() => SetTone(tone)">@tone</button>
+        }
+    </div>
+
+    <label class="label">Story idea</label>
+    <textarea class="textarea" style="height: 380px;"
+              @bind="_storyIdea"
+              @bind:event="oninput"
+              disabled="@_busy"
+              placeholder="Write or paste your full story idea here… (Grok will turn this into a complete script with scenes)"></textarea>
+
+    <div class="row-actions mt-3">
+        <button class="btn btn-primary btn-lg" disabled="@_busy" @onclick="GenerateScript">
+            @if (_busy) { <span class="spinner"></span> }
+            @(_busy ? "Generating script…" : "Generate Script Now")
+        </button>
+        <button class="btn btn-secondary" disabled="@_busy" @onclick="SaveOnly">Save</button>
+        @if (p.Scenes.Count > 0)
+        {
+            <a class="btn btn-ghost" href="/scripts">Review script (@p.Scenes.Count scenes)</a>
+            <a class="btn btn-ghost" href="/storyboards">Storyboard</a>
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <p class="error-text mt-2">@_error</p>
+    }
+}
+
+@code {
+    private static readonly string[] _tones = ["Dark", "Epic", "Humorous", "Tense", "Custom"];
+    private string _storyIdea = "";
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ProjectService.InitializeAsync();
+        if (ProjectService.CurrentProject is { } p)
+            _storyIdea = p.StoryIdea ?? "";
+    }
+
+    private async Task SetTone(string tone)
+    {
+        if (ProjectService.CurrentProject is null || _busy) return;
+        ProjectService.CurrentProject.Tone = tone;
+        await ProjectService.SaveCurrentProjectAsync();
+    }
+
+    private async Task SaveOnly()
+    {
+        if (ProjectService.CurrentProject is null || _busy) return;
+        ProjectService.CurrentProject.StoryIdea = _storyIdea;
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show("Project saved.", ToastLevel.Success);
+    }
+
+    private async Task GenerateScript()
+    {
+        if (ProjectService.CurrentProject is null) return;
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_storyIdea))
+        {
+            Toast.Show("Enter a story idea first.", ToastLevel.Warning);
+            return;
+        }
+
+        _busy = true;
+        using var busy = Busy.Show(
+            "Generating script with Grok…",
+            "Sending your story idea to xAI. This often takes 15–60 seconds. Please wait.");
+        try
+        {
+            var p = ProjectService.CurrentProject;
+            p.StoryIdea = _storyIdea;
+            await ProjectService.SaveCurrentProjectAsync();
+
+            var request = new ScriptRequest
+            {
+                StoryIdea = p.StoryIdea,
+                ArtStyle = p.ArtStyle,
+                TargetLength = p.TargetLength,
+                Tone = p.Tone,
+                ProjectId = p.Id,
+                ExistingCharacters = p.Characters
+                    .Select(c => new CharacterSeedDto
+                    {
+                        Name = c.Name,
+                        Description = c.Description,
+                        Role = c.Role.ToString(),
+                        LockedLook = StoryboardBible.VisualLock(c)
+                    })
+                    .ToList(),
+                ExistingLocations = p.Locations
+                    .Select(l => new LocationDto { Name = l.Name, LockedLook = l.LockedLook })
+                    .ToList()
+            };
+
+            Busy.Update("Waiting for Grok chat response (structured scenes + characters)…");
+            var result = await StoryGen.GenerateScriptAsync(request);
+            Busy.Update("Applying script to project and saving…");
+            ScriptApplyHelper.ApplyScriptToProject(p, result);
+            await ProjectService.SaveCurrentProjectAsync();
+
+            Toast.Show($"Script ready: {p.Scenes.Count} scenes, {p.Characters.Count} characters.", ToastLevel.Success);
+            Nav.NavigateTo("/scripts");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

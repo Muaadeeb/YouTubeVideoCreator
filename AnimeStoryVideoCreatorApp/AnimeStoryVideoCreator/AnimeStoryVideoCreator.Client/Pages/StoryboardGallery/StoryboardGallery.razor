@@ -1,0 +1,823 @@
+@page "/storyboards"
+@inject IProjectService ProjectService
+@inject IImageGenerationService ImageGen
+@inject IVideoGenerationService VideoGen
+@inject IExportService Export
+@inject IToastService Toast
+@inject IBusyService Busy
+@inject IGenerationPreferences Prefs
+@inject IJSRuntime JS
+
+@if (ProjectService.CurrentProject is null)
+{
+    <div class="empty-state">
+        <p>No project loaded.</p>
+        <a class="btn btn-primary" href="/projects">My Projects</a>
+    </div>
+}
+else
+{
+    var p = ProjectService.CurrentProject;
+    var panels = p.AllPanels().ToList();
+    var missingStills = panels.Count(panel => !HasStill(p, panel));
+    var tier = Prefs.QualityTier;
+    var missCost = CostCatalog.EstimateImages(missingStills, tier);
+
+    <h1 class="page-title">Storyboard Gallery</h1>
+    <p class="page-sub">@p.ProjectName — lock the <a href="/continuity">set and extras</a> first, then generate. Fresh text-to-image will drift.</p>
+
+    <div class="card mb-2" style="border: 1px solid rgba(0,245,255,0.25);">
+        <strong style="color: var(--accent);">Quality storyboard (continuity @(Prefs.UseContinuityLock ? "ON" : "OFF"))</strong>
+        <ol class="muted" style="font-size: 14px; margin: 10px 0 0; padding-left: 1.25rem; line-height: 1.55;">
+            <li>On each scene: <strong>Lock set</strong> (creates a location) then generate or import an <strong>establishing plate</strong>.</li>
+            <li>Paid <strong>Still $</strong> now edits from the plate + previous frame + portraits (up to 3 refs) when continuity is on.</li>
+            <li>Free path: copy prompts (includes the visual bible). In Imagine use <em>edit / reference</em> with the previous still — do not start a new image from text for frames 2+.</li>
+            <li>Name background people as <strong>Extras</strong> in the vault. Random crowds will not stay consistent.</li>
+        </ol>
+        <p class="dim" style="font-size:12px;margin:10px 0 0;">
+            Locations: @p.Locations.Count · plates: @p.Locations.Count(l => StoryboardBible.HasUsablePixels(p.FindAsset(l.PlateAssetId)))
+            · extras: @p.Characters.Count(c => c.Role == CharacterRole.Extra)
+            · <a href="/continuity">Continuity Bible</a> · <a href="/settings">Settings</a>
+        </p>
+    </div>
+
+    <div class="row-actions mb-2">
+        <button class="btn btn-primary" disabled="@(_busy || panels.Count == 0 || missingStills == 0)" @onclick="CopyMissingPrompts"
+                title="Copy enhanced prompts for panels with no still (for free Grok Imagine)">
+            Copy missing prompts (@missingStills)
+        </button>
+        <button class="btn btn-secondary" disabled="@(_busy || panels.Count == 0 || missingStills == 0)" @onclick="DownloadMissingPrompts"
+                title="Download a numbered .txt of missing prompts">
+            Download missing prompts
+        </button>
+        <label class="btn btn-secondary" style="cursor:pointer; margin:0;" title="Import multiple images into empty panels, in order">
+            @if (_importingMulti) { <span class="spinner"></span> }
+            Import many stills
+            <InputFile OnChange="OnImportManyStills" accept="image/*" multiple style="display:none" disabled="@(_busy || missingStills == 0)" />
+        </label>
+        <button class="btn btn-ghost" disabled="@(_busy || panels.Count == 0)" @onclick="CopyAllPrompts">
+            Copy all prompts
+        </button>
+    </div>
+
+    <div class="row-actions mb-2">
+        <button class="btn btn-ghost" disabled="@(_busy || panels.Count == 0 || missingStills == 0)" @onclick="GenerateAllImages"
+                title="@(missingStills == 0 ? "All panels already have stills." : $"Paid API: {missCost}")">
+            @if (_busyAllImages) { <span class="spinner"></span> }
+            @if (_busyAllImages)
+            {
+                <text>Generating missing stills…</text>
+            }
+            else if (missingStills == 0)
+            {
+                <text>All stills ready</text>
+            }
+            else
+            {
+                <text>Paid: missing stills (@missingStills) · @CostCatalog.FormatUsd(missingStills * CostCatalog.ImageUnitUsd(tier))</text>
+            }
+        </button>
+        <button class="btn btn-secondary" disabled="@(_busy || panels.Count == 0)" @onclick="ExportZip">
+            @if (_exporting) { <span class="spinner"></span> }
+            Export package (ZIP)
+        </button>
+        <a class="btn btn-ghost" href="/scripts">Edit script</a>
+        <a class="btn btn-ghost" href="/settings">Cost settings</a>
+    </div>
+
+    @if (_showPromptPreview && !string.IsNullOrEmpty(_promptPreview))
+    {
+        <div class="card mb-2">
+            <div class="row-actions" style="justify-content: space-between; margin-bottom: 8px;">
+                <strong style="color: var(--accent);">Prompt pack preview</strong>
+                <button class="btn btn-ghost btn-sm" @onclick="() => _showPromptPreview = false">Hide</button>
+            </div>
+            <textarea class="textarea" style="min-height: 180px; font-size: 13px;" readonly>@_promptPreview</textarea>
+        </div>
+    }
+
+    @if (panels.Count == 0)
+    {
+        <div class="empty-state">
+            No panels yet. Generate a script from Story Input first.
+            <div class="mt-2"><a class="btn btn-primary" href="/story-input">Story Input</a></div>
+        </div>
+    }
+    else
+    {
+        @foreach (var scene in p.Scenes.OrderBy(s => s.Order))
+        {
+            var scenePanels = scene.Panels.OrderBy(x => x.Order).ToList();
+            if (scenePanels.Count == 0) continue;
+            var loc = StoryboardBible.ResolveLocation(p, scene);
+            var hasPlate = loc is not null && StoryboardBible.HasUsablePixels(p.FindAsset(loc.PlateAssetId));
+
+            <div class="scene-band">
+                <div class="scene-band-head">
+                    <div>
+                        <strong>Scene @scene.Order — @scene.Title</strong>
+                        <span class="dim" style="margin-left:10px;font-size:13px;">@StoryboardBible.ContinuitySummary(p, scene)</span>
+                    </div>
+                    <div class="row-actions gap-sm">
+                        <button class="btn btn-ghost btn-sm" disabled="@_busy" @onclick="() => LockScene(scene)">
+                            @(loc is null ? "Lock set" : "Set locked")
+                        </button>
+                        <button class="btn btn-secondary btn-sm" disabled="@(_busy || loc is null)" @onclick="() => GenScenePlate(scene)">
+                            @(hasPlate ? "Re-gen plate $" : "Establishing plate $")
+                        </button>
+                    </div>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(scene.ExtrasLock))
+                {
+                    <p class="dim" style="font-size:12px;margin:0 0 10px;">Extras: @scene.ExtrasLock</p>
+                }
+            </div>
+
+            <div class="panel-grid mb-2">
+            @foreach (var panel in scenePanels)
+            {
+                var image = p.FindAsset(panel.GeneratedImageAssetId);
+                var video = p.FindAsset(panel.GeneratedVideoAssetId);
+                var key = panel.Id;
+                var isBusy = _busyPanels.Contains(key);
+                var refs = Prefs.UseContinuityLock ? StoryboardBible.SelectReferences(p, scene, panel) : new List<ImageReferenceDto>();
+
+                <div class="panel-card">
+                    @if (video?.ExternalRef is { Length: > 0 } vurl && !vurl.StartsWith("idb:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <video src="@vurl" controls playsinline></video>
+                    }
+                    else if (image?.DataBase64 is { Length: > 0 })
+                    {
+                        <img src="@ToDataUrl(image)" alt="@panel.Caption" />
+                    }
+                    else if (image?.ExternalRef is { Length: > 0 } iurl && !iurl.StartsWith("idb:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <img src="@iurl" alt="@panel.Caption" />
+                    }
+                    else
+                    {
+                        <div class="placeholder-thumb">
+                            @if (isBusy)
+                            {
+                                <span class="spinner"></span>
+                                <span style="margin-left:8px;">Working…</span>
+                            }
+                            else
+                            {
+                                <span>No image yet — Import free or pay for Still</span>
+                            }
+                        </div>
+                    }
+
+                    <div class="panel-card-body">
+                        <p class="panel-card-title">@(scene.Title) · Panel @panel.Order</p>
+                        <p class="panel-card-meta">@panel.Caption</p>
+                        <p class="panel-card-meta" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">@panel.ImagePrompt</p>
+                        <p class="panel-card-meta">
+                            @(refs.Count == 0
+                                ? "Refs: none (will drift)"
+                                : $"Refs: {string.Join(", ", refs.Select(r => r.Label))}")
+                        </p>
+                        <div class="panel-card-actions">
+                            <label class="btn btn-ghost btn-sm" style="cursor:pointer; margin:0;">
+                                Import
+                                <InputFile OnChange="e => OnImportStill(e, panel)" accept="image/*" style="display:none" disabled="@(_busy || isBusy)" />
+                            </label>
+                            <button class="btn btn-primary btn-sm" disabled="@(_busy || isBusy)" @onclick="() => GenerateImage(panel)"
+                                    title="@($"Paid: {CostCatalog.EstimateImages(1, tier)}")">
+                                @if (isBusy && _busyMode == "image") { <span class="spinner"></span> }
+                                Still $
+                            </button>
+                            <button class="btn btn-secondary btn-sm" disabled="@(_busy || isBusy || !HasStill(p, panel))" @onclick="() => GenerateVideo(panel)"
+                                    title="@($"Paid: {CostCatalog.EstimateVideo(Prefs.DefaultVideoSeconds, tier)}")">
+                                @if (isBusy && _busyMode == "video") { <span class="spinner"></span> }
+                                Video $
+                            </button>
+                            <button class="btn btn-ghost btn-sm" disabled="@(_busy || isBusy)" @onclick="() => CopyPrompt(panel)" title="Copy prompt for free Grok Imagine">
+                                Copy prompt
+                            </button>
+                            <button class="btn btn-ghost btn-sm" disabled="@(_busy || isBusy || !HasStill(p, panel) || loc is null)"
+                                    @onclick="() => UseAsPlate(scene, panel)" title="Use this still as the location establishing plate">
+                                Use as plate
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+            </div>
+        }
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <p class="error-text mt-2">@_error</p>
+    }
+}
+
+@code {
+    private readonly HashSet<Guid> _busyPanels = new();
+    private bool _busy;
+    private bool _busyAllImages;
+    private bool _exporting;
+    private bool _importingMulti;
+    private bool _showPromptPreview;
+    private string _promptPreview = "";
+    private string _busyMode = "";
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ProjectService.InitializeAsync();
+        await Prefs.LoadAsync();
+    }
+
+    private static string ToDataUrl(GeneratedAsset asset)
+    {
+        var raw = asset.DataBase64 ?? "";
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            return raw;
+        var mime = string.IsNullOrWhiteSpace(asset.MimeType) ? "image/png" : asset.MimeType;
+        return $"data:{mime};base64,{raw}";
+    }
+
+    private static bool HasStill(Project project, StoryboardPanel panel) =>
+        ProjectQc.HasStill(project, panel);
+
+    private string BuildEnhancedPrompt(Project p, StoryboardPanel panel)
+    {
+        var scene = p.Scenes.FirstOrDefault(s => s.Id == panel.SceneId);
+        if (Prefs.UseContinuityLock)
+        {
+            var refs = StoryboardBible.SelectReferences(p, scene, panel);
+            return StoryboardBible.BuildLockedPrompt(p, scene, panel, refs);
+        }
+
+        var text = $"{panel.ImagePrompt}, {p.ArtStyle} anime/manhwa style, highly detailed, cinematic lighting";
+        if (p.Characters.Count > 0)
+        {
+            var ctx = string.Join("; ", p.Characters.Select(c => $"{c.Name}: {StoryboardBible.VisualLock(c)}"));
+            text += $", consistent characters: {ctx}";
+        }
+
+        return text;
+    }
+
+    private string BuildPromptPack(Project p, IReadOnlyList<StoryboardPanel> panels, bool missingOnly)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# Prompt pack — {p.ProjectName}");
+        sb.AppendLine($"# Series: {p.SeriesName} | Style: {p.ArtStyle} | Tone: {p.Tone}");
+        sb.AppendLine(missingOnly
+            ? "# Scope: MISSING stills only (panels with no image yet)"
+            : "# Scope: ALL panels");
+        sb.AppendLine("# Then: Storyboard → Import many stills (same order) or Import per panel.");
+        sb.AppendLine();
+        if (Prefs.UseContinuityLock)
+            sb.Append(StoryboardBible.BuildPromptPackPreamble(p));
+
+        var n = 0;
+        foreach (var panel in panels)
+        {
+            if (missingOnly && HasStill(p, panel)) continue;
+            n++;
+            var scene = p.Scenes.FirstOrDefault(s => s.Id == panel.SceneId);
+            sb.AppendLine("==========");
+            sb.AppendLine($"PROMPT {n}");
+            sb.AppendLine($"Scene: {scene?.Title ?? "?"} · Panel {panel.Order}");
+            if (!string.IsNullOrWhiteSpace(panel.Caption))
+                sb.AppendLine($"Caption: {panel.Caption}");
+            sb.AppendLine("----------");
+            sb.AppendLine(BuildEnhancedPrompt(p, panel));
+            sb.AppendLine();
+        }
+
+        if (n == 0)
+            sb.AppendLine("(No prompts in this pack.)");
+        else
+            sb.AppendLine($"# Total prompts: {n}");
+
+        return sb.ToString();
+    }
+
+    private async Task CopyTextAsync(string text, string successToast)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Toast.Show(successToast, ToastLevel.Success);
+        }
+        catch
+        {
+            _promptPreview = text;
+            _showPromptPreview = true;
+            Toast.Show("Clipboard blocked — pack shown below; select all and copy, or use Download.", ToastLevel.Warning);
+        }
+    }
+
+    private async Task CopyMissingPrompts()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var missing = p.AllPanels().Where(x => !HasStill(p, x)).ToList();
+        if (missing.Count == 0)
+        {
+            Toast.Show("No missing stills — nothing to copy.", ToastLevel.Info);
+            return;
+        }
+
+        var pack = BuildPromptPack(p, p.AllPanels().ToList(), missingOnly: true);
+        _promptPreview = pack;
+        _showPromptPreview = true;
+        await CopyTextAsync(pack,
+            $"Copied {missing.Count} missing prompt(s). Paste into free Grok Imagine one-by-one (or split by PROMPT N).");
+    }
+
+    private async Task CopyAllPrompts()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var all = p.AllPanels().ToList();
+        if (all.Count == 0)
+        {
+            Toast.Show("No panels yet.", ToastLevel.Info);
+            return;
+        }
+
+        var pack = BuildPromptPack(p, all, missingOnly: false);
+        _promptPreview = pack;
+        _showPromptPreview = true;
+        await CopyTextAsync(pack, $"Copied all {all.Count} prompt(s).");
+    }
+
+    private async Task DownloadMissingPrompts()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var missing = p.AllPanels().Where(x => !HasStill(p, x)).ToList();
+        if (missing.Count == 0)
+        {
+            Toast.Show("No missing stills.", ToastLevel.Info);
+            return;
+        }
+
+        var pack = BuildPromptPack(p, p.AllPanels().ToList(), missingOnly: true);
+        _promptPreview = pack;
+        _showPromptPreview = true;
+        var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pack));
+        var name = SanitizeFileName(p.ProjectName) + "_missing_prompts.txt";
+        await JS.InvokeVoidAsync("asvcDownloadBase64", name, "text/plain", b64);
+        Toast.Show($"Downloaded {name} ({missing.Count} prompts) — $0 API.", ToastLevel.Success);
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(name.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+        return string.IsNullOrWhiteSpace(cleaned) ? "project" : cleaned.Trim();
+    }
+
+    private async Task<bool> ConfirmSpendAsync(string action, string estimateLine)
+    {
+        if (!Prefs.ConfirmBeforeApiSpend) return true;
+        var msg =
+            $"{action}\n\nEstimated API cost: {estimateLine}\nQuality tier: {Prefs.QualityTier}\n\n" +
+            "Tip: Use Copy missing prompts + free Grok Imagine + Import many stills.\n\nProceed with paid API call?";
+        return await JS.InvokeAsync<bool>("confirm", msg);
+    }
+
+    private async Task CopyPrompt(StoryboardPanel panel)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        await CopyTextAsync(BuildEnhancedPrompt(p, panel),
+            "Prompt copied — paste into free Grok Imagine, then Import.");
+    }
+
+    private async Task OnImportStill(InputFileChangeEventArgs e, StoryboardPanel panel)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null || e.File is null) return;
+
+        _busy = true;
+        _busyPanels.Add(panel.Id);
+        using var busy = Busy.Show("Importing free still…", "Reading image from disk (no API charge).");
+        try
+        {
+            await AssignFileToPanelAsync(p, panel, e.File);
+            await ProjectService.SaveCurrentProjectAsync();
+            Toast.Show("Still imported ($0 API).", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busyPanels.Remove(panel.Id);
+            _busy = _busyPanels.Count > 0 || _importingMulti;
+        }
+    }
+
+    /// <summary>
+    /// Multi-select images → fill missing panels only, in storyboard order.
+    /// File order should match PROMPT 1..N from the missing-prompts pack.
+    /// </summary>
+    private async Task OnImportManyStills(InputFileChangeEventArgs e)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+
+        var missing = p.AllPanels().Where(x => !HasStill(p, x)).ToList();
+        if (missing.Count == 0)
+        {
+            Toast.Show("No empty panels — nothing to import.", ToastLevel.Info);
+            return;
+        }
+
+        var files = e.GetMultipleFiles(100).ToList();
+        if (files.Count == 0) return;
+
+        _importingMulti = true;
+        _busy = true;
+        using var busy = Busy.Show(
+            "Importing free stills…",
+            $"Assigning up to {Math.Min(files.Count, missing.Count)} file(s) to empty panels in order ($0 API).");
+
+        var assigned = 0;
+        var errors = 0;
+        try
+        {
+            var count = Math.Min(files.Count, missing.Count);
+            for (var i = 0; i < count; i++)
+            {
+                var panel = missing[i];
+                var file = files[i];
+                Busy.Update($"Import {i + 1}/{count}: {file.Name} → panel {panel.Order}");
+                try
+                {
+                    await AssignFileToPanelAsync(p, panel, file);
+                    assigned++;
+                }
+                catch (Exception ex)
+                {
+                    errors++;
+                    Toast.Show($"{file.Name}: {ex.Message}", ToastLevel.Error);
+                }
+            }
+
+            if (assigned > 0)
+            {
+                p.Status = ProjectStatus.StoryboardInProgress;
+                await ProjectService.SaveCurrentProjectAsync();
+            }
+
+            var leftoverFiles = files.Count - count;
+            var stillMissing = missing.Count - assigned;
+            Toast.Show(
+                $"Imported {assigned} still(s) ($0 API)." +
+                (leftoverFiles > 0 ? $" {leftoverFiles} extra file(s) ignored (more files than empty panels)." : "") +
+                (stillMissing > 0 ? $" {stillMissing} panel(s) still empty." : " All gaps filled.") +
+                (errors > 0 ? $" {errors} failed." : ""),
+                errors > 0 ? ToastLevel.Warning : ToastLevel.Success);
+        }
+        finally
+        {
+            _importingMulti = false;
+            _busy = false;
+        }
+    }
+
+    private static async Task AssignFileToPanelAsync(Project p, StoryboardPanel panel, IBrowserFile file)
+    {
+        const long max = 8 * 1024 * 1024;
+        await using var stream = file.OpenReadStream(max);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        var bytes = ms.ToArray();
+        var b64 = Convert.ToBase64String(bytes);
+        var mime = string.IsNullOrWhiteSpace(file.ContentType) ? "image/png" : file.ContentType;
+
+        var asset = new GeneratedAsset
+        {
+            Kind = AssetKind.Image,
+            PromptUsed = panel.ImagePrompt + " [imported — $0]",
+            Model = "import/local-file",
+            DataBase64 = b64,
+            MimeType = mime,
+            CostEstimateUsd = 0
+        };
+
+        p.Assets.RemoveAll(a => a.Id == panel.GeneratedImageAssetId);
+        p.Assets.Add(asset);
+        panel.GeneratedImageAssetId = asset.Id;
+    }
+
+    private async Task GenerateImage(StoryboardPanel panel)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+
+        var estimate = CostCatalog.EstimateImages(1, Prefs.QualityTier);
+        if (!await ConfirmSpendAsync("Generate 1 paid still via xAI API", estimate))
+        {
+            Toast.Show("Cancelled — no API charge.", ToastLevel.Info);
+            return;
+        }
+
+        _error = null;
+        _busy = true;
+        _busyMode = "image";
+        _busyPanels.Add(panel.Id);
+
+        var sceneTitle = p.Scenes.FirstOrDefault(s => s.Id == panel.SceneId)?.Title ?? "panel";
+        using var busy = Busy.Show(
+            "Generating paid still…",
+            $"{estimate}. Panel {panel.Order} · {sceneTitle}.");
+        try
+        {
+            var req = BuildImageRequest(p, panel);
+            var asset = await ImageGen.GeneratePanelImageAsync(req);
+            asset.CostEstimateUsd = (double)CostCatalog.ImageUnitUsd(Prefs.QualityTier);
+            p.Assets.RemoveAll(a => a.Id == panel.GeneratedImageAssetId);
+            p.Assets.Add(asset);
+            panel.GeneratedImageAssetId = asset.Id;
+            p.Status = ProjectStatus.StoryboardInProgress;
+            await ProjectService.SaveCurrentProjectAsync();
+            var refNote = req.References is { Count: > 0 }
+                ? $" Continuity edit from {req.References.Count} ref(s)."
+                : " No refs — lock a set / portrait or this will drift.";
+            Toast.Show($"Still generated ({estimate}).{refNote}", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busyPanels.Remove(panel.Id);
+            _busy = _busyPanels.Count > 0 || _busyAllImages;
+            _busyMode = "";
+        }
+    }
+
+    private async Task GenerateAllImages()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+
+        var list = p.AllPanels().Where(panel => !HasStill(p, panel)).ToList();
+        var skipped = p.AllPanels().Count() - list.Count;
+
+        if (list.Count == 0)
+        {
+            Toast.Show(
+                skipped > 0
+                    ? $"All {skipped} panels already have stills. $0 API."
+                    : "No panels need stills.",
+                ToastLevel.Info);
+            return;
+        }
+
+        var estimate = CostCatalog.EstimateImages(list.Count, Prefs.QualityTier);
+        if (!await ConfirmSpendAsync(
+                $"Generate {list.Count} missing still(s) via paid xAI API\n(Skip {skipped} that already exist)",
+                estimate))
+        {
+            Toast.Show("Cancelled — no API charge.", ToastLevel.Info);
+            return;
+        }
+
+        _busyAllImages = true;
+        _busy = true;
+        _error = null;
+
+        using var busy = Busy.Show(
+            "Generating missing stills (paid)…",
+            $"{estimate}. Skipping {skipped} existing.");
+        try
+        {
+            var i = 0;
+            foreach (var panel in list)
+            {
+                if (HasStill(p, panel)) continue;
+                i++;
+                Busy.Update($"Paid still {i}/{list.Count} — panel {panel.Order}. {estimate}");
+                await GenerateImageWithoutOuterBusy(panel, i, list.Count);
+            }
+
+            Toast.Show($"Done. {i} paid still(s); skipped {skipped}. Est. {estimate}.", ToastLevel.Success);
+        }
+        finally
+        {
+            _busyAllImages = false;
+            _busy = false;
+        }
+    }
+
+    private ImageGenerationRequest BuildImageRequest(Project p, StoryboardPanel panel)
+    {
+        var scene = p.Scenes.FirstOrDefault(s => s.Id == panel.SceneId);
+        var refs = Prefs.UseContinuityLock
+            ? StoryboardBible.SelectReferences(p, scene, panel)
+            : new List<ImageReferenceDto>();
+        var prompt = Prefs.UseContinuityLock
+            ? StoryboardBible.BuildLockedPrompt(p, scene, panel, refs)
+            : panel.ImagePrompt;
+
+        return new ImageGenerationRequest
+        {
+            Prompt = prompt,
+            ArtStyle = Prefs.UseContinuityLock ? "" : p.ArtStyle,
+            CharacterContext = Prefs.UseContinuityLock
+                ? null
+                : string.Join("; ", p.Characters.Select(c => $"{c.Name}: {StoryboardBible.VisualLock(c)}")),
+            AspectRatio = "16:9",
+            Resolution = "1k",
+            Model = CostCatalog.ImageModel(Prefs.QualityTier),
+            References = refs.Count == 0 ? null : refs
+        };
+    }
+
+    private async Task LockScene(Scene scene)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var loc = StoryboardBible.EnsureLocation(p, scene);
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show($"Scene {scene.Order} locked to set “{loc.Name}”. Generate or import a plate next.", ToastLevel.Success);
+    }
+
+    private async Task UseAsPlate(Scene scene, StoryboardPanel panel)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null || !HasStill(p, panel)) return;
+        var loc = StoryboardBible.EnsureLocation(p, scene);
+        StoryboardBible.PromoteStillToPlate(p, loc, panel);
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show($"Scene {scene.Order} plate is now panel {panel.Order} of “{loc.Name}”.", ToastLevel.Success);
+    }
+
+    private async Task GenScenePlate(Scene scene)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var loc = StoryboardBible.EnsureLocation(p, scene);
+        var estimate = CostCatalog.EstimateImages(1, Prefs.QualityTier);
+        if (!await ConfirmSpendAsync($"Generate establishing plate for {loc.Name}", estimate))
+        {
+            Toast.Show("Cancelled — no API charge.", ToastLevel.Info);
+            return;
+        }
+
+        _busy = true;
+        using var busy = Busy.Show(
+            $"Establishing plate — {loc.Name}",
+            "Empty set for continuity. Later stills will edit from this image.");
+        try
+        {
+            var asset = await ImageGen.GeneratePanelImageAsync(new ImageGenerationRequest
+            {
+                Prompt = StoryboardBible.BuildEstablishingPrompt(p, loc),
+                AspectRatio = "16:9",
+                Resolution = "1k",
+                Model = CostCatalog.ImageModel(Prefs.QualityTier)
+            });
+            asset.CostEstimateUsd = (double)CostCatalog.ImageUnitUsd(Prefs.QualityTier);
+            p.Assets.RemoveAll(a => a.Id == loc.PlateAssetId);
+            p.Assets.Add(asset);
+            loc.PlateAssetId = asset.Id;
+            await ProjectService.SaveCurrentProjectAsync();
+            Toast.Show($"Plate ready for {loc.Name} ({estimate}).", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busy = _busyPanels.Count > 0 || _busyAllImages;
+        }
+    }
+
+    private async Task GenerateImageWithoutOuterBusy(StoryboardPanel panel, int index, int total)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        if (HasStill(p, panel)) return;
+
+        _busyMode = "image";
+        _busyPanels.Add(panel.Id);
+        try
+        {
+            var asset = await ImageGen.GeneratePanelImageAsync(BuildImageRequest(p, panel));
+            asset.CostEstimateUsd = (double)CostCatalog.ImageUnitUsd(Prefs.QualityTier);
+            p.Assets.RemoveAll(a => a.Id == panel.GeneratedImageAssetId);
+            p.Assets.Add(asset);
+            panel.GeneratedImageAssetId = asset.Id;
+            p.Status = ProjectStatus.StoryboardInProgress;
+            await ProjectService.SaveCurrentProjectAsync();
+            Busy.Update($"Saved still {index}/{total}.");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toast.Show($"Panel {panel.Order}: {ex.Message}", ToastLevel.Error);
+        }
+        finally
+        {
+            _busyPanels.Remove(panel.Id);
+            _busyMode = "";
+        }
+    }
+
+    private async Task GenerateVideo(StoryboardPanel panel)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        if (!HasStill(p, panel))
+        {
+            Toast.Show("Import or generate a still first.", ToastLevel.Warning);
+            return;
+        }
+
+        var image = p.FindAsset(panel.GeneratedImageAssetId)!;
+        var seconds = Math.Clamp(Prefs.DefaultVideoSeconds, 1, 15);
+        var estimate = CostCatalog.EstimateVideo(seconds, Prefs.QualityTier);
+        if (!await ConfirmSpendAsync($"Generate {seconds}s paid video via xAI API", estimate))
+        {
+            Toast.Show("Cancelled — no API charge.", ToastLevel.Info);
+            return;
+        }
+
+        _error = null;
+        _busy = true;
+        _busyMode = "video";
+        _busyPanels.Add(panel.Id);
+
+        using var busy = Busy.Show("Generating paid video…", $"{estimate}. Keep this tab open.");
+        try
+        {
+            var motion = string.IsNullOrWhiteSpace(panel.MotionPrompt)
+                ? $"Cinematic anime motion. {panel.Caption}"
+                : panel.MotionPrompt!;
+
+            var start = await VideoGen.StartImageToVideoAsync(new VideoGenerationRequest
+            {
+                Prompt = motion,
+                ImageBase64 = image.DataBase64,
+                ImageMimeType = image.MimeType,
+                ImageUrl = image.ExternalRef is { Length: > 0 } r && !r.StartsWith("idb:", StringComparison.OrdinalIgnoreCase) ? r : null,
+                Duration = seconds,
+                AspectRatio = "16:9",
+                Resolution = Prefs.DefaultVideoResolution,
+                Model = CostCatalog.VideoModel(Prefs.QualityTier)
+            });
+
+            var asset = await VideoGen.WaitForVideoAsync(start.RequestId, onProgress: msg => Busy.Update(msg));
+            asset.PromptUsed = motion;
+            asset.CostEstimateUsd = (double)(seconds * CostCatalog.VideoPerSecUsd(Prefs.QualityTier));
+            p.Assets.RemoveAll(a => a.Id == panel.GeneratedVideoAssetId);
+            p.Assets.Add(asset);
+            panel.GeneratedVideoAssetId = asset.Id;
+            p.Status = ProjectStatus.ExportReady;
+            await ProjectService.SaveCurrentProjectAsync();
+            Toast.Show($"Video ready ({estimate}).", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busyPanels.Remove(panel.Id);
+            _busy = _busyPanels.Count > 0;
+            _busyMode = "";
+        }
+    }
+
+    private async Task ExportZip()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        _exporting = true;
+        using var busy = Busy.Show("Building export ZIP…", "No API cost for export.");
+        try
+        {
+            await Export.ExportProjectZipAsync(p);
+            Toast.Show("Export downloaded ($0 API).", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+}

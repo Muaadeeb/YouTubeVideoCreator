@@ -1,0 +1,117 @@
+@page "/projects"
+@inject IProjectService ProjectService
+@inject IToastService Toast
+@inject NavigationManager Nav
+
+<h1 class="page-title">My Projects</h1>
+<p class="page-sub">
+    Stored on the host in <strong>SQLite</strong> (<code>App_Data/asvc.db</code>) plus asset files — same list on http and https.
+</p>
+
+<div class="row-actions mb-2">
+    <a class="btn btn-primary" href="/">✨ New Project</a>
+    <button class="btn btn-secondary btn-sm" @onclick="Refresh">Refresh</button>
+    <button class="btn btn-ghost btn-sm" @onclick="Recover">Import from this browser</button>
+</div>
+
+@if (!_ready)
+{
+    <p class="muted"><span class="spinner"></span> Loading…</p>
+}
+else if (ProjectService.Projects.Count == 0)
+{
+    <div class="empty-state">
+        <p>No projects in SQLite yet.</p>
+        <p class="muted" style="font-size:14px;line-height:1.55;max-width:36rem;margin:12px auto 0;">
+            New work is saved on the server. If you still have stories in this browser’s old localStorage,
+            click <strong>Import from this browser</strong>. If that finds nothing, try the other localhost
+            URL you used before (http vs https) and import there.
+        </p>
+    </div>
+}
+else
+{
+    <table class="table-list">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Series</th>
+                <th>Status</th>
+                <th>Scenes</th>
+                <th>Updated</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in ProjectService.Projects)
+            {
+                <tr>
+                    <td><strong>@item.ProjectName</strong></td>
+                    <td class="muted">@item.SeriesName</td>
+                    <td>@item.Status</td>
+                    <td>@item.SceneCount / @item.PanelCount panels</td>
+                    <td class="dim">@item.UpdatedAt.ToLocalTime().ToString("g")</td>
+                    <td>
+                        <div class="row-actions gap-sm">
+                            <button class="btn btn-primary btn-sm" @onclick="() => Open(item.Id)">Open</button>
+                            <button class="btn btn-danger btn-sm" @onclick="() => Delete(item)">Delete</button>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private bool _ready;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ProjectService.InitializeAsync();
+        _ready = true;
+    }
+
+    private async Task Refresh()
+    {
+        await ProjectService.InitializeAsync();
+        StateHasChanged();
+    }
+
+    private async Task Recover()
+    {
+        var added = await ProjectService.RecoverLostProjectsAsync();
+        if (added == 0)
+            Toast.Show("Nothing to import from this browser. Try the other localhost URL (http vs https).", ToastLevel.Warning);
+        else
+            Toast.Show($"Imported {added} project(s) from this browser into SQLite.", ToastLevel.Success);
+        StateHasChanged();
+    }
+
+    private async Task Open(Guid id)
+    {
+        try
+        {
+            await ProjectService.LoadProjectAsync(id);
+            Toast.Show("Project loaded.", ToastLevel.Success);
+            Nav.NavigateTo("/story-input");
+        }
+        catch (Exception ex)
+        {
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+    }
+
+    private async Task Delete(ProjectMetadata item)
+    {
+        try
+        {
+            await ProjectService.DeleteProjectAsync(item.Id);
+            Toast.Show($"Deleted '{item.ProjectName}'.", ToastLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+    }
+}

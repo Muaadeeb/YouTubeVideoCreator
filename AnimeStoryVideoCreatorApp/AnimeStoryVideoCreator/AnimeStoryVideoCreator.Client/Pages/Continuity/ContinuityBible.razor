@@ -1,0 +1,341 @@
+@page "/continuity"
+@inject IProjectService ProjectService
+@inject IImageGenerationService ImageGen
+@inject IToastService Toast
+@inject IBusyService Busy
+@inject IGenerationPreferences Prefs
+
+@if (ProjectService.CurrentProject is null)
+{
+    <div class="empty-state">
+        <h2 class="page-title" style="font-size:22px;">No project loaded</h2>
+        <p class="muted">Open a project, then lock locations and extras here before generating more stills.</p>
+        <a class="btn btn-primary" href="/projects">My Projects</a>
+    </div>
+}
+else
+{
+    var p = ProjectService.CurrentProject;
+    var extras = p.Characters.Where(c => c.Role == CharacterRole.Extra).ToList();
+    var leads = p.Characters.Where(c => c.Role != CharacterRole.Extra).ToList();
+    var plates = p.Locations.Count(l => StoryboardBible.HasUsablePixels(p.FindAsset(l.PlateAssetId)));
+    var scenesUnlocked = p.Scenes.Count(s => StoryboardBible.ResolveLocation(p, s) is null);
+
+    <h1 class="page-title">Continuity Bible</h1>
+    <p class="page-sub">
+        @p.ProjectName — lock <strong>sets</strong> and <strong>named extras</strong> so storyboard frames stop inventing a new village and a new crowd.
+    </p>
+
+    <div class="summary-bar">
+        <div><strong>Locations:</strong> @p.Locations.Count</div>
+        <div><strong>Plates:</strong> @plates / @p.Locations.Count</div>
+        <div><strong>Leads:</strong> @leads.Count</div>
+        <div><strong>Named extras:</strong> @extras.Count</div>
+        <div><strong>Scenes with no set:</strong> <span style="color:@(scenesUnlocked > 0 ? "var(--warning)" : "var(--success)")">@scenesUnlocked</span></div>
+    </div>
+
+    <div class="card mb-2" style="border:1px solid rgba(0,245,255,0.25);">
+        <strong style="color:var(--accent);">Quality storyboard order</strong>
+        <ol class="muted" style="font-size:14px; margin:10px 0 0; padding-left:1.25rem; line-height:1.55;">
+            <li>Name each <strong>location</strong> and write a frozen look (architecture, palette, weather, props).</li>
+            <li>Generate or import one <strong>establishing plate</strong> per location (empty set, no hero close-up).</li>
+            <li>Assign that location to every scene that happens there.</li>
+            <li>In Character Vault, mark background people as <strong>Extra</strong> with a locked look — not “a crowd”.</li>
+            <li>Generate later frames with continuity on (Settings). Paid stills now <em>edit from</em> the plate + previous frame + portraits.</li>
+        </ol>
+    </div>
+
+    <div class="card mb-2">
+        <h3 style="margin-top:0;color:var(--accent);font-size:18px;">Add location</h3>
+        <div class="grid-2">
+            <div>
+                <label class="label">Name</label>
+                <input class="input" @bind="_newLocName" placeholder="Ashfall Village Square" />
+            </div>
+            <div>
+                <label class="label">Apply to scenes without a set</label>
+                <label style="display:flex;gap:8px;align-items:center;font-size:13px;color:var(--text-muted);margin-top:10px;">
+                    <input type="checkbox" @bind="_applyToUnlocked" /> Also assign this location to scenes that have none
+                </label>
+            </div>
+        </div>
+        <div class="mt-2">
+            <label class="label">Locked look (repeat this in every frame)</label>
+            <textarea class="textarea" style="min-height:90px;" @bind="_newLocLook"
+                      placeholder="Muddy cobbles, three-story timber inns with faded red banners, cracked stone well, overcast grey-green sky, blue-glass lanterns…"></textarea>
+        </div>
+        <div class="row-actions mt-2">
+            <button class="btn btn-primary" @onclick="AddLocation">Add location</button>
+            <a class="btn btn-ghost" href="/characters">Character Vault (extras)</a>
+            <a class="btn btn-ghost" href="/storyboards">Storyboard</a>
+        </div>
+    </div>
+
+    @if (p.Locations.Count == 0)
+    {
+        <div class="empty-state mb-2">No locations yet. Add one, or lock a scene from the Storyboard (uses the scene title as the set name).</div>
+    }
+    else
+    {
+        @foreach (var loc in p.Locations.OrderBy(l => l.Name))
+        {
+            var plate = p.FindAsset(loc.PlateAssetId);
+            var usedBy = p.Scenes.Count(s => s.LocationId == loc.Id
+                || string.Equals(s.LocationName, loc.Name, StringComparison.OrdinalIgnoreCase));
+
+            <div class="card mb-2">
+                <div class="grid-2">
+                    <div>
+                        <label class="label">Name</label>
+                        <input class="input" @bind="loc.Name" @bind:event="oninput" />
+                        <p class="dim" style="font-size:12px;margin-top:6px;">Used by @usedBy scene(s) · @(plate is null ? "no plate" : "plate on file")</p>
+                    </div>
+                    <div>
+                        <label class="label">Assign to a scene</label>
+                        <select class="select" @onchange="e => AssignScene(loc, e)">
+                            <option value="">Choose scene…</option>
+                            @foreach (var s in p.Scenes.OrderBy(x => x.Order))
+                            {
+                                <option value="@s.Id">@s.Order. @s.Title</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <label class="label">Locked look</label>
+                    <textarea class="textarea" style="min-height:80px;" @bind="loc.LockedLook" @bind:event="oninput"></textarea>
+                </div>
+                <div class="mt-2" style="display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:16px;align-items:start;">
+                    <div>
+                        @if (plate?.DataBase64 is { Length: > 0 })
+                        {
+                            <img src="@ToDataUrl(plate)" alt="@loc.Name plate" style="width:100%;border-radius:8px;aspect-ratio:16/9;object-fit:cover;" />
+                        }
+                        else if (plate?.ExternalRef is { Length: > 0 } url && !url.StartsWith("idb:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <img src="@url" alt="@loc.Name plate" style="width:100%;border-radius:8px;aspect-ratio:16/9;object-fit:cover;" />
+                        }
+                        else
+                        {
+                            <div class="placeholder-thumb">No establishing plate</div>
+                        }
+                    </div>
+                    <div class="row-actions">
+                        <button class="btn btn-primary btn-sm" disabled="@_busy" @onclick="() => GenPlate(loc)">Generate plate $</button>
+                        <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0;">
+                            Import plate
+                            <InputFile OnChange="e => ImportPlate(e, loc)" accept="image/*" style="display:none" disabled="@_busy" />
+                        </label>
+                        <button class="btn btn-ghost btn-sm" @onclick="() => AssignUnlocked(loc)">Assign to scenes with no set</button>
+                        <button class="btn btn-secondary btn-sm" @onclick="Save">Save</button>
+                        <button class="btn btn-danger btn-sm" @onclick="() => RemoveLocation(loc)">Remove</button>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+
+    <div class="card mb-2">
+        <h3 style="margin-top:0;color:var(--accent);font-size:18px;">Named extras</h3>
+        <p class="muted" style="font-size:14px;">
+            Background people must be <strong>named extras</strong> with a locked look. Anonymous “villagers” will change every frame.
+        </p>
+        @if (extras.Count == 0)
+        {
+            <p class="dim">None yet. Add a character and set Role to Extra.</p>
+        }
+        else
+        {
+            <ul class="muted" style="font-size:14px;line-height:1.6;">
+                @foreach (var c in extras)
+                {
+                    <li><strong>@c.Name</strong> — @(string.IsNullOrWhiteSpace(StoryboardBible.VisualLock(c)) ? "no locked look" : StoryboardBible.VisualLock(c))</li>
+                }
+            </ul>
+        }
+        <a class="btn btn-ghost btn-sm" href="/characters">Edit extras in Character Vault</a>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top:0;color:var(--accent);font-size:18px;">Scenes → sets</h3>
+        @if (p.Scenes.Count == 0)
+        {
+            <p class="dim">No scenes. Generate a script first.</p>
+        }
+        else
+        {
+            <table class="table-list">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Scene</th>
+                        <th>Location</th>
+                        <th>Extras lock</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in p.Scenes.OrderBy(x => x.Order))
+                    {
+                        <tr>
+                            <td>@s.Order</td>
+                            <td>@s.Title</td>
+                            <td>@StoryboardBible.ContinuitySummary(p, s)</td>
+                            <td class="dim">@(string.IsNullOrWhiteSpace(s.ExtrasLock) ? "—" : s.ExtrasLock)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+}
+
+@code {
+    private string _newLocName = "";
+    private string _newLocLook = "";
+    private bool _applyToUnlocked = true;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ProjectService.InitializeAsync();
+        await Prefs.LoadAsync();
+    }
+
+    private static string ToDataUrl(GeneratedAsset asset)
+    {
+        var raw = asset.DataBase64 ?? "";
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return raw;
+        return $"data:{asset.MimeType};base64,{raw}";
+    }
+
+    private async Task AddLocation()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null || string.IsNullOrWhiteSpace(_newLocName)) return;
+
+        var loc = new Location
+        {
+            Name = _newLocName.Trim(),
+            LockedLook = _newLocLook.Trim()
+        };
+        p.Locations.Add(loc);
+        if (_applyToUnlocked)
+            AssignUnlocked(loc);
+
+        _newLocName = _newLocLook = "";
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show($"Location “{loc.Name}” added.", ToastLevel.Success);
+    }
+
+    private void AssignUnlocked(Location loc)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        var n = 0;
+        foreach (var scene in p.Scenes)
+        {
+            if (StoryboardBible.ResolveLocation(p, scene) is not null) continue;
+            StoryboardBible.AssignLocationToScene(p, scene, loc);
+            n++;
+        }
+        Toast.Show(n == 0 ? "Every scene already has a set." : $"Assigned {loc.Name} to {n} scene(s).", ToastLevel.Info);
+    }
+
+    private void AssignScene(Location loc, ChangeEventArgs e)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null || e.Value is null) return;
+        if (!Guid.TryParse(e.Value.ToString(), out var id)) return;
+        var scene = p.Scenes.FirstOrDefault(s => s.Id == id);
+        if (scene is null) return;
+        StoryboardBible.AssignLocationToScene(p, scene, loc);
+        Toast.Show($"Scene {scene.Order} → {loc.Name}. Save when ready.", ToastLevel.Info);
+    }
+
+    private async Task Save()
+    {
+        if (ProjectService.CurrentProject is null) return;
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show("Continuity bible saved.", ToastLevel.Success);
+    }
+
+    private async Task RemoveLocation(Location loc)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        foreach (var scene in p.Scenes.Where(s => s.LocationId == loc.Id))
+            scene.LocationId = null;
+        p.Locations.Remove(loc);
+        await ProjectService.SaveCurrentProjectAsync();
+    }
+
+    private async Task GenPlate(Location loc)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        _busy = true;
+        using var busy = Busy.Show(
+            $"Generating establishing plate — {loc.Name}",
+            "Empty set, no hero close-up. Later frames will edit from this image.");
+        try
+        {
+            var asset = await ImageGen.GeneratePanelImageAsync(new ImageGenerationRequest
+            {
+                Prompt = StoryboardBible.BuildEstablishingPrompt(p, loc),
+                AspectRatio = "16:9",
+                Resolution = "1k",
+                Model = CostCatalog.ImageModel(Prefs.QualityTier)
+            });
+            p.Assets.RemoveAll(a => a.Id == loc.PlateAssetId);
+            p.Assets.Add(asset);
+            loc.PlateAssetId = asset.Id;
+            await ProjectService.SaveCurrentProjectAsync();
+            Toast.Show($"Plate for {loc.Name} ready. Use it as a reference on later stills.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ImportPlate(InputFileChangeEventArgs e, Location loc)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null || e.File is null) return;
+        _busy = true;
+        using var busy = Busy.Show("Importing location plate…", "No API charge.");
+        try
+        {
+            const long max = 8 * 1024 * 1024;
+            await using var stream = e.File.OpenReadStream(max);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var asset = new GeneratedAsset
+            {
+                Kind = AssetKind.Image,
+                PromptUsed = $"Location plate: {loc.Name} [imported]",
+                Model = "import/local-file",
+                DataBase64 = Convert.ToBase64String(ms.ToArray()),
+                MimeType = string.IsNullOrWhiteSpace(e.File.ContentType) ? "image/png" : e.File.ContentType,
+                CostEstimateUsd = 0
+            };
+            p.Assets.RemoveAll(a => a.Id == loc.PlateAssetId);
+            p.Assets.Add(asset);
+            loc.PlateAssetId = asset.Id;
+            await ProjectService.SaveCurrentProjectAsync();
+            Toast.Show("Plate imported ($0 API).", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

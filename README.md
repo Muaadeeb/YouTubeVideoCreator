@@ -1,5 +1,13 @@
-# YouTubeVideoCreator
-Used to create Projects and Series for YouTube
+# YouTubeVideoCreator / Anime Story Video Creator
+
+**Run the app:** see [AnimeStoryVideoCreatorApp/docs/SETUP.md](AnimeStoryVideoCreatorApp/docs/SETUP.md)  
+**API keys:** [AnimeStoryVideoCreatorApp/docs/SECRETS.md](AnimeStoryVideoCreatorApp/docs/SECRETS.md)  
+**Status / agenda:** [AnimeStoryVideoCreatorApp/docs/planning/Current-Status-And-Action-Plan.md](AnimeStoryVideoCreatorApp/docs/planning/Current-Status-And-Action-Plan.md)  
+**Grok limits:** [AnimeStoryVideoCreatorApp/docs/planning/Grok-Capabilities-And-Limits.md](AnimeStoryVideoCreatorApp/docs/planning/Grok-Capabilities-And-Limits.md)
+
+---
+
+Used to create Projects and Series for YouTube  
 Anime Story Video Creator – Finalized Application Specification
 Project Owner: Timothy
 Purpose: A web-based tool that allows Timothy to efficiently create high-quality original anime / comic-strip / manhwa-style YouTube story videos using only Grok Imagine for all generation tasks.

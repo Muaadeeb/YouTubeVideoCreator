@@ -1,43 +1,181 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject IToastService ToastService
+@inject IBusyService Busy
+@inject IProjectService ProjectService
+@inject IJSRuntime JS
 
-<div style="min-height: 100vh; background-color: #0F1117; color: #E5E7EB; display: flex; font-family: system-ui, sans-serif;">
+<div style="min-height: 100vh; background-color: var(--bg); color: var(--text); display: flex; font-family: var(--font);">
 
-    <!-- Sidebar -->
-    <div style="width: 280px; background-color: #1A1F2E; border-right: 1px solid #334155; padding: 24px; display: flex; flex-direction: column;">
-        
-        <div style="margin-bottom: 40px;">
-            <h1 style="color: #00F5FF; font-size: 28px; font-weight: bold; margin: 0;">Anime Story Creator</h1>
-            <p style="color: #64748B; font-size: 14px; margin-top: 4px;">YouTube Video Factory</p>
+    <div style="width: 280px; background-color: var(--bg-elevated); border-right: 1px solid var(--border); padding: 24px; display: flex; flex-direction: column; flex-shrink: 0;">
+        <div style="margin-bottom: 32px;">
+            <h1 style="color: var(--accent); font-size: 24px; font-weight: bold; margin: 0;">Anime Story Creator</h1>
+            <p style="color: var(--text-dim); font-size: 13px; margin-top: 4px;">YouTube Video Factory</p>
         </div>
 
-        <nav style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
-            <a href="/" style="padding: 14px 20px; background-color: #334155; color: #00F5FF; border-radius: 12px; text-decoration: none; font-weight: 500;">✨ New Project</a>
-            <a href="/projects" style="padding: 14px 20px; border-radius: 12px; text-decoration: none; color: #E5E7EB;">📁 My Projects</a>
-            <a href="/characters" style="padding: 14px 20px; border-radius: 12px; text-decoration: none; color: #E5E7EB;">👤 Character Vault</a>
-            <a href="/series-settings" style="padding: 14px 20px; border-radius: 12px; text-decoration: none; color: #E5E7EB;">📚 Series Settings</a>
-            <a href="/scripts" style="padding: 14px 20px; border-radius: 12px; text-decoration: none; color: #E5E7EB;">📜 Script Library</a>
-            <a href="/storyboards" style="padding: 14px 20px; border-radius: 12px; text-decoration: none; color: #E5E7EB;">🎞️ Storyboard Gallery</a>
-            <a href="/analytics" style="padding: 14px 20px; border-radius: 12px; text-decoration: none; color: #E5E7EB;">📊 Analytics</a>
-            <a href="/settings" style="padding: 14px 20px; border-radius: 12px; text-decoration: none; color: #E5E7EB;">⚙️ Settings</a>
+        <nav style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+            <NavLink class="nav-link" href="/" Match="NavLinkMatch.All">✨ New Project</NavLink>
+            <NavLink class="nav-link" href="/projects">📁 My Projects</NavLink>
+            <NavLink class="nav-link" href="/story-input">📝 Story Input</NavLink>
+            <NavLink class="nav-link" href="/scripts">📜 Script Library</NavLink>
+            <NavLink class="nav-link" href="/storyboards">🎞️ Storyboard Gallery</NavLink>
+            <NavLink class="nav-link" href="/continuity">🧭 Continuity Bible</NavLink>
+            <NavLink class="nav-link" href="/review">✅ Frame QC Review</NavLink>
+            <NavLink class="nav-link" href="/characters">👤 Character Vault</NavLink>
+            <NavLink class="nav-link" href="/settings">⚙️ Settings</NavLink>
         </nav>
 
-        <div style="margin-top: auto; padding-top: 24px; border-top: 1px solid #334155; color: #64748B; font-size: 13px; text-align: center;">
+        @if (ProjectService.CurrentProject is { } p)
+        {
+            <div style="margin-top: 16px; padding: 12px; background: rgba(0,245,255,0.06); border-radius: 10px; font-size: 12px; color: var(--text-muted);">
+                <div class="dim">Current project</div>
+                <div style="color: var(--text); font-weight: 600; margin-top: 4px;">@p.ProjectName</div>
+            </div>
+        }
+
+        <div style="margin-top: auto; padding-top: 24px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12px; text-align: center;">
             Powered by Grok Imagine
         </div>
     </div>
 
-    <!-- Main Content -->
-    <div style="flex: 1; display: flex; flex-direction: column;">
-        <header style="height: 64px; background-color: #1A1F2E; border-bottom: 1px solid #334155; display: flex; align-items: center; padding: 0 32px;">
-            <h2 style="margin: 0; font-size: 20px; font-weight: 600;">@Title</h2>
+    <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+        <header style="height: 64px; background-color: var(--bg-elevated); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 32px; gap: 16px;">
+            <h2 style="margin: 0; font-size: 18px; font-weight: 600; flex: 1;">@PageTitle</h2>
+            @if (Busy.IsBusy)
+            {
+                <div style="display:flex; align-items:center; gap:10px; color: var(--accent); font-size: 13px; font-weight: 600;">
+                    <span class="spinner"></span>
+                    <span>Working… @FormatElapsed()</span>
+                </div>
+            }
         </header>
-        
-        <main style="flex: 1; padding: 40px; overflow: auto;">
+
+        <main style="flex: 1; padding: 32px 40px; overflow: auto;">
             @Body
         </main>
     </div>
 </div>
 
+@if (Busy.IsBusy)
+{
+    <div class="busy-overlay" role="alertdialog" aria-busy="true" aria-live="assertive" aria-label="@Busy.Title">
+        <div class="busy-card">
+            <div class="spinner spinner-lg" aria-hidden="true"></div>
+            <h3>@Busy.Title</h3>
+            @if (!string.IsNullOrWhiteSpace(Busy.Detail))
+            {
+                <p class="busy-detail">@Busy.Detail</p>
+            }
+            <p class="busy-elapsed">Elapsed: @FormatElapsed()</p>
+            <p class="busy-hint">
+                Please keep this tab open. Grok / xAI calls can take from a few seconds to several minutes (especially video).
+                Do not close the browser or stop debugging — the app is still working.
+            </p>
+        </div>
+    </div>
+}
+
+<div class="toast-host">
+    @foreach (var t in _toasts)
+    {
+        <div class="toast @t.Level.ToString().ToLowerInvariant()">@t.Message</div>
+    }
+</div>
+
 @code {
-    [Parameter] public string Title { get; set; } = "Dashboard";
+    private readonly List<ToastMessage> _toasts = new();
+    private CancellationTokenSource? _tickCts;
+    private string PageTitle => "Dashboard";
+
+    protected override async Task OnInitializedAsync()
+    {
+        ToastService.OnShow += OnToast;
+        Busy.Changed += OnBusyChanged;
+        ProjectService.Changed += OnProjectChanged;
+        await ProjectService.InitializeAsync();
+    }
+
+    private void OnBusyChanged()
+    {
+        _ = SyncBodyLockAsync();
+        if (Busy.IsBusy)
+            StartTicker();
+        else
+            StopTicker();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SyncBodyLockAsync()
+    {
+        try
+        {
+            if (Busy.IsBusy)
+                await JS.InvokeVoidAsync("eval", "document.body.classList.add('busy-lock')");
+            else
+                await JS.InvokeVoidAsync("eval", "document.body.classList.remove('busy-lock')");
+        }
+        catch
+        {
+            // JS may not be ready during first paint
+        }
+    }
+
+    private void StartTicker()
+    {
+        StopTicker();
+        _tickCts = new CancellationTokenSource();
+        var token = _tickCts.Token;
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested && Busy.IsBusy)
+            {
+                await InvokeAsync(StateHasChanged);
+                try { await Task.Delay(500, token); }
+                catch (OperationCanceledException) { break; }
+            }
+        }, token);
+    }
+
+    private void StopTicker()
+    {
+        _tickCts?.Cancel();
+        _tickCts?.Dispose();
+        _tickCts = null;
+    }
+
+    private string FormatElapsed()
+    {
+        if (Busy.StartedUtc is null) return "0s";
+        var span = DateTime.UtcNow - Busy.StartedUtc.Value;
+        if (span.TotalHours >= 1)
+            return $"{(int)span.TotalHours}h {span.Minutes:D2}m {span.Seconds:D2}s";
+        if (span.TotalMinutes >= 1)
+            return $"{(int)span.TotalMinutes}m {span.Seconds:D2}s";
+        return $"{Math.Max(0, (int)span.TotalSeconds)}s";
+    }
+
+    private void OnToast(ToastMessage msg)
+    {
+        _toasts.Add(msg);
+        _ = DismissLater(msg);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task DismissLater(ToastMessage msg)
+    {
+        await Task.Delay(4200);
+        _toasts.Remove(msg);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnProjectChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        ToastService.OnShow -= OnToast;
+        Busy.Changed -= OnBusyChanged;
+        ProjectService.Changed -= OnProjectChanged;
+        StopTicker();
+        _ = JS.InvokeVoidAsync("eval", "document.body.classList.remove('busy-lock')");
+    }
 }

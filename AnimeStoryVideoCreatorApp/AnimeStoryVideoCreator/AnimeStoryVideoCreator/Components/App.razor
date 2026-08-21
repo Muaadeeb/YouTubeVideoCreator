@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -7,12 +7,34 @@
     <base href="/" />
     <link rel="stylesheet" href="css/app.css" />
     <link rel="stylesheet" href="AnimeStoryVideoCreator.styles.css" />
-    <HeadOutlet @rendermode="InteractiveWebAssembly" />
+    @* prerender:false — client services (IProjectService, etc.) live in WASM DI only *@
+    <HeadOutlet @rendermode="new InteractiveWebAssemblyRenderMode(prerender: false)" />
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveWebAssembly" />
+    <Routes @rendermode="new InteractiveWebAssemblyRenderMode(prerender: false)" />
     <script src="_framework/blazor.web.js"></script>
+    <script src="js/asvc-storage.js"></script>
+    <script>
+        window.asvcDownloadBase64 = function (fileName, contentType, base64) {
+            const raw = (base64 || '');
+            const idx = raw.indexOf('base64,');
+            const b64 = idx >= 0 ? raw.substring(idx + 7) : raw;
+            const binary = atob(b64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName || 'download';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        };
+    </script>
 </body>
 
 </html>

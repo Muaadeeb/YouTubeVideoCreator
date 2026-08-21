@@ -1,0 +1,190 @@
+@page "/settings"
+@inject IProjectService ProjectService
+@inject HttpClient Http
+@inject IToastService Toast
+@inject IBusyService Busy
+@inject IGenerationPreferences Prefs
+@using AnimeStoryVideoCreator.Client.Services.Persistence
+
+<h1 class="page-title">Settings</h1>
+<p class="page-sub">API status, cost controls, and local data.</p>
+
+<div class="card mb-2" style="border: 1px solid rgba(251, 191, 36, 0.35);">
+    <h3 style="margin:0 0 12px 0; color: var(--warning); font-size: 18px;">Cost reality check</h3>
+    <p class="muted" style="font-size: 14px; line-height: 1.55;">
+        Paid xAI API is convenient but <strong>not free</strong>. Free Grok Imagine (consumer) / NotebookLM can make stills at $0 API cost.
+        This app defaults to <strong>Economy</strong> models and an <strong>import-first</strong> workflow so you do not burn credits on every panel.
+        See <code>docs/COST-AND-FREE-WORKFLOW.md</code>.
+    </p>
+    <p class="dim" style="font-size: 13px; margin-top: 8px;">
+        Est. Economy still ~$0.02 · Premium still ~$0.05 · Economy video ~$0.05/s · Premium video ~$0.08/s
+        (list prices; not a bill).
+    </p>
+</div>
+
+<div class="card mb-2">
+    <h3 style="margin:0 0 12px 0; color: var(--accent); font-size: 18px;">Generation spend controls</h3>
+    <div class="stack">
+        <div>
+            <label class="label">Quality tier (paid API)</label>
+            <select class="select" @bind="_tier" @bind:after="SavePrefs">
+                <option value="Economy">Economy — cheapest (default)</option>
+                <option value="Balanced">Balanced — mid price / quality</option>
+                <option value="Premium">Premium — quality model + better video (expensive)</option>
+            </select>
+            <p class="dim" style="font-size: 12px; margin-top: 6px;">
+                Image: <code>@CostCatalog.ImageModel(_tier)</code> · Video: <code>@CostCatalog.VideoModel(_tier)</code>
+            </p>
+        </div>
+        <div class="grid-2">
+            <div>
+                <label class="label">Default video length (seconds)</label>
+                <input class="input" type="number" min="1" max="15" @bind="_videoSeconds" @bind:after="SavePrefs" />
+            </div>
+            <div>
+                <label class="label">Default video resolution</label>
+                <select class="select" @bind="_videoRes" @bind:after="SavePrefs">
+                    <option value="480p">480p (cheaper / faster)</option>
+                    <option value="720p">720p</option>
+                    <option value="1080p">1080p (costliest when supported)</option>
+                </select>
+            </div>
+        </div>
+        <label style="display:flex; gap:10px; align-items:center; font-size:14px; color: var(--text-muted);">
+            <input type="checkbox" @bind="_confirm" @bind:after="SavePrefs" />
+            Confirm with $ estimate before every paid Still / Video / batch
+        </label>
+        <label style="display:flex; gap:10px; align-items:center; font-size:14px; color: var(--text-muted);">
+            <input type="checkbox" @bind="_preferFree" @bind:after="SavePrefs" />
+            Show free-import guidance on Storyboard
+        </label>
+        <label style="display:flex; gap:10px; align-items:center; font-size:14px; color: var(--text-muted);">
+            <input type="checkbox" @bind="_continuity" @bind:after="SavePrefs" />
+            Continuity lock — restated bible + edit from location plate / previous frame / portraits (recommended)
+        </label>
+    </div>
+    <p class="muted mt-2" style="font-size: 13px;">
+        Example: 10 missing stills (Economy tier) ≈ <strong>@CostCatalog.FormatUsd(10 * CostCatalog.ImageUnitUsd(_tier))</strong>
+        · 1× @_videoSeconds s video ≈ <strong>@CostCatalog.FormatUsd(_videoSeconds * CostCatalog.VideoPerSecUsd(_tier))</strong>
+    </p>
+</div>
+
+<div class="card mb-2">
+    <h3 style="margin:0 0 12px 0; color: var(--accent); font-size: 18px;">xAI / Grok API</h3>
+    @if (_health is null && !_healthError)
+    {
+        <p class="muted"><span class="spinner"></span> Checking server…</p>
+    }
+    else if (_healthError)
+    {
+        <p class="error-text">Could not reach /api/health. Is the host running?</p>
+    }
+    else if (_health is not null)
+    {
+        <p>
+            @if (_health.HasApiKey)
+            {
+                <span style="color: var(--success);">● API key configured on server</span>
+            }
+            else
+            {
+                <span style="color: var(--warning);">● No API key detected</span>
+            }
+        </p>
+        <p class="muted" style="font-size: 14px;">@_health.Message</p>
+        <p class="dim" style="font-size: 13px; margin-top: 12px;">
+            Configure with user-secrets or environment variable. See <code>docs/SECRETS.md</code>.
+        </p>
+    }
+    <button class="btn btn-secondary btn-sm mt-2" @onclick="LoadHealth">Recheck</button>
+</div>
+
+<div class="card mb-2">
+    <h3 style="margin:0 0 12px 0; color: var(--accent); font-size: 18px;">Local data</h3>
+    <p class="muted" style="font-size: 14px;">
+        Projects → host <strong>SQLite</strong> (<code>App_Data/asvc.db</code>).
+        Stills / clips → files under <code>App_Data/assets/</code>.
+        Browser localStorage is only used to <em>import</em> older stories.
+    </p>
+    @if (_health is { HasSqlite: true })
+    {
+        <p class="dim" style="font-size:13px;">@_health.DataDirectory · @_health.ProjectCount project(s)</p>
+    }
+    <p class="muted">Projects in SQLite: <strong>@ProjectService.Projects.Count</strong></p>
+    <button class="btn btn-secondary mt-2" @onclick="ImportBrowser">Import from this browser</button>
+    <button class="btn btn-danger mt-2" @onclick="ClearAll">Clear all SQLite projects</button>
+</div>
+
+<div class="card">
+    <h3 style="margin:0 0 12px 0; color: var(--accent); font-size: 18px;">Content policy (app)</h3>
+    <ul class="muted" style="font-size: 14px; line-height: 1.6;">
+        <li>Original adult fiction only for mature themes.</li>
+        <li>No sexual content involving minors (including ambiguous-age designs).</li>
+        <li>No undressing / intimate edits of real people.</li>
+    </ul>
+</div>
+
+@code {
+    private HealthStatus? _health;
+    private bool _healthError;
+    private string _tier = "Economy";
+    private int _videoSeconds = 5;
+    private string _videoRes = "480p";
+    private bool _confirm = true;
+    private bool _preferFree = true;
+    private bool _continuity = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ProjectService.InitializeAsync();
+        await Prefs.LoadAsync();
+        _tier = Prefs.QualityTier;
+        _videoSeconds = Prefs.DefaultVideoSeconds;
+        _videoRes = Prefs.DefaultVideoResolution;
+        _confirm = Prefs.ConfirmBeforeApiSpend;
+        _preferFree = Prefs.PreferFreeImportWorkflow;
+        _continuity = Prefs.UseContinuityLock;
+        await LoadHealth();
+    }
+
+    private async Task SavePrefs()
+    {
+        Prefs.QualityTier = _tier;
+        Prefs.DefaultVideoSeconds = Math.Clamp(_videoSeconds, 1, 15);
+        Prefs.DefaultVideoResolution = _videoRes;
+        Prefs.ConfirmBeforeApiSpend = _confirm;
+        Prefs.PreferFreeImportWorkflow = _preferFree;
+        Prefs.UseContinuityLock = _continuity;
+        await Prefs.SaveAsync();
+        Toast.Show("Spend preferences saved.", ToastLevel.Success);
+    }
+
+    private async Task LoadHealth()
+    {
+        _healthError = false;
+        using var busy = Busy.Show("Checking API configuration…", "Calling /api/health.");
+        try
+        {
+            _health = await Http.GetFromJsonAsync<HealthStatus>("/api/health");
+        }
+        catch
+        {
+            _health = null;
+            _healthError = true;
+        }
+    }
+
+    private async Task ImportBrowser()
+    {
+        using var busy = Busy.Show("Importing browser projects…", "Copying localStorage / IndexedDB stories into SQLite.");
+        var n = await ProjectService.RecoverLostProjectsAsync();
+        Toast.Show(n == 0 ? "No browser projects found on this address." : $"Imported {n} project(s) into SQLite.", n == 0 ? ToastLevel.Warning : ToastLevel.Success);
+    }
+
+    private async Task ClearAll()
+    {
+        using var busy = Busy.Show("Clearing SQLite data…", "Removing projects and asset files on the host.");
+        await ProjectService.ClearAllAsync();
+        Toast.Show("All SQLite projects cleared.", ToastLevel.Warning);
+    }
+}

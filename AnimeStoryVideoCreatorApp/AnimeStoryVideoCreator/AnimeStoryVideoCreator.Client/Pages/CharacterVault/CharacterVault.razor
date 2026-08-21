@@ -1,0 +1,218 @@
+@page "/characters"
+@inject IProjectService ProjectService
+@inject IImageGenerationService ImageGen
+@inject IToastService Toast
+@inject IBusyService Busy
+
+@if (ProjectService.CurrentProject is null)
+{
+    <div class="empty-state">
+        <p>No project loaded. Characters are stored per project for MVP.</p>
+        <a class="btn btn-primary" href="/projects">My Projects</a>
+    </div>
+}
+else
+{
+    var p = ProjectService.CurrentProject;
+
+    <h1 class="page-title">Character Vault</h1>
+    <p class="page-sub">@p.ProjectName — locked looks + portraits are the identity refs for every storyboard frame. Mark background people as Extra.</p>
+
+    <div class="card mb-2">
+        <h3 style="margin-top:0;color:var(--accent);font-size:18px;">Add character</h3>
+        <div class="grid-2">
+            <div>
+                <label class="label">Name</label>
+                <input class="input" @bind="_newName" />
+            </div>
+            <div>
+                <label class="label">Role</label>
+                <select class="select" @bind="_newRole">
+                    <option value="Lead">Lead</option>
+                    <option value="Supporting">Supporting</option>
+                    <option value="Extra">Extra (named background person)</option>
+                </select>
+            </div>
+        </div>
+        <div class="grid-2 mt-2">
+            <div>
+                <label class="label">Voice hint</label>
+                <input class="input" @bind="_newVoice" placeholder="Deep, calm narrator" />
+            </div>
+            <div>
+                <label class="label">Personality / story notes</label>
+                <input class="input" @bind="_newDesc" placeholder="Stoic isekai MC, dry humor…" />
+            </div>
+        </div>
+        <div class="mt-2">
+            <label class="label">Locked look (face, hair, wardrobe, marks — do not change between frames)</label>
+            <textarea class="textarea" style="min-height:90px;" @bind="_newLook"
+                      placeholder="Adult man, 28, short black hair with silver streak on the left, scar through left eyebrow, charcoal coat with bronze clasp…"></textarea>
+        </div>
+        <div class="row-actions mt-2">
+            <button class="btn btn-primary" @onclick="AddCharacter">Add</button>
+        </div>
+    </div>
+
+    @if (p.Characters.Count == 0)
+    {
+        <div class="empty-state">No characters yet. Generate a script (auto-fills) or add manually.</div>
+    }
+    else
+    {
+        <div class="panel-grid">
+            @foreach (var c in p.Characters)
+            {
+                var portrait = p.FindAsset(c.PortraitAssetId);
+                <div class="panel-card">
+                    @if (portrait?.DataBase64 is { Length: > 0 })
+                    {
+                        <img src="@ToDataUrl(portrait)" alt="@c.Name" />
+                    }
+                    else if (portrait?.ExternalRef is { Length: > 0 } url)
+                    {
+                        <img src="@url" alt="@c.Name" />
+                    }
+                    else
+                    {
+                        <div class="placeholder-thumb">No portrait</div>
+                    }
+                    <div class="panel-card-body">
+                        <input class="input" @bind="c.Name" @bind:event="oninput" />
+                        <select class="select" value="@c.Role.ToString()" @onchange="e => SetRole(c, e)">
+                            <option value="Lead">Lead</option>
+                            <option value="Supporting">Supporting</option>
+                            <option value="Extra">Extra (background)</option>
+                        </select>
+                        <textarea class="textarea" style="min-height:70px;" @bind="c.Description" @bind:event="oninput"
+                                  placeholder="Personality / story"></textarea>
+                        <textarea class="textarea" style="min-height:90px;" @bind="c.LockedLook" @bind:event="oninput"
+                                  placeholder="Locked look: face, hair, wardrobe, marks"></textarea>
+                        <input class="input" @bind="c.VoiceHint" @bind:event="oninput" placeholder="Voice hint" />
+                        <label style="font-size:12px;color:var(--text-muted);display:flex;gap:8px;align-items:center;">
+                            <input type="checkbox" @bind="c.IsAdult" /> Clearly adult character
+                        </label>
+                        <div class="panel-card-actions">
+                            <button class="btn btn-primary btn-sm" disabled="@_busy" @onclick="() => GenPortrait(c)">Portrait</button>
+                            <button class="btn btn-danger btn-sm" @onclick="() => Remove(c)">Remove</button>
+                            <button class="btn btn-secondary btn-sm" @onclick="Save">Save</button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    private string _newName = "";
+    private string _newDesc = "";
+    private string _newLook = "";
+    private string _newVoice = "";
+    private string _newRole = "Lead";
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() =>
+        await ProjectService.InitializeAsync();
+
+    private static string ToDataUrl(GeneratedAsset asset)
+    {
+        var raw = asset.DataBase64 ?? "";
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return raw;
+        return $"data:{asset.MimeType};base64,{raw}";
+    }
+
+    private async Task AddCharacter()
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null || string.IsNullOrWhiteSpace(_newName)) return;
+        var look = string.IsNullOrWhiteSpace(_newLook) ? _newDesc.Trim() : _newLook.Trim();
+        p.Characters.Add(new Character
+        {
+            Name = _newName.Trim(),
+            Description = _newDesc.Trim(),
+            LockedLook = look,
+            AppearanceNotes = look,
+            VoiceHint = string.IsNullOrWhiteSpace(_newVoice) ? null : _newVoice.Trim(),
+            ReferencePrompt = look,
+            Role = Enum.TryParse<CharacterRole>(_newRole, out var role) ? role : CharacterRole.Lead,
+            IsAdult = true
+        });
+        _newName = _newDesc = _newLook = _newVoice = "";
+        _newRole = "Lead";
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show("Character added.", ToastLevel.Success);
+    }
+
+    private async Task Remove(Character c)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        p.Characters.Remove(c);
+        await ProjectService.SaveCurrentProjectAsync();
+    }
+
+    private static void SetRole(Character c, ChangeEventArgs e)
+    {
+        if (Enum.TryParse<CharacterRole>(e.Value?.ToString(), out var role))
+            c.Role = role;
+    }
+
+    private async Task Save()
+    {
+        if (ProjectService.CurrentProject is null) return;
+        foreach (var c in ProjectService.CurrentProject.Characters)
+        {
+            if (string.IsNullOrWhiteSpace(c.LockedLook))
+                c.LockedLook = c.AppearanceNotes ?? c.Description;
+            c.AppearanceNotes = c.LockedLook;
+            c.ReferencePrompt = StoryboardBible.VisualLock(c);
+        }
+        await ProjectService.SaveCurrentProjectAsync();
+        Toast.Show("Characters saved.", ToastLevel.Success);
+    }
+
+    private async Task GenPortrait(Character c)
+    {
+        var p = ProjectService.CurrentProject;
+        if (p is null) return;
+        _busy = true;
+        using var busy = Busy.Show(
+            $"Generating portrait for {c.Name}…",
+            "Calling Grok Imagine. Usually 10–40 seconds — please wait.");
+        try
+        {
+            var lockLook = StoryboardBible.VisualLock(c);
+            var prompt =
+                $"Character identity reference sheet, head and shoulders, clean neutral background. " +
+                $"{c.Name} ({c.Role}): {lockLook}. " +
+                "Same face and wardrobe every time this character appears. Adult presentation when mature. This is the master likeness.";
+            Busy.Update("Waiting for xAI image generation…");
+            var asset = await ImageGen.GeneratePanelImageAsync(new ImageGenerationRequest
+            {
+                Prompt = prompt,
+                ArtStyle = p.ArtStyle,
+                CharacterContext = lockLook,
+                AspectRatio = "1:1",
+                Resolution = "1k"
+            });
+            Busy.Update("Saving portrait…");
+            p.Assets.RemoveAll(a => a.Id == c.PortraitAssetId);
+            p.Assets.Add(asset);
+            c.PortraitAssetId = asset.Id;
+            c.ReferencePrompt = lockLook;
+            if (string.IsNullOrWhiteSpace(c.LockedLook))
+                c.LockedLook = lockLook;
+            await ProjectService.SaveCurrentProjectAsync();
+            Toast.Show($"Portrait for {c.Name} ready.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Toast.Show(ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
